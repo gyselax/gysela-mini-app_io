@@ -1,0 +1,7 @@
+# Deactivate slow tests if requested
+if (DEFINED ENV{POISSON_2D_BUILD_TESTING})
+    set(POISSON_2D_BUILD_TESTING $ENV{POISSON_2D_BUILD_TESTING})
+endif()
+
+# CTest flags
+set(CTEST_OUTPUT_ON_FAILURE ON)

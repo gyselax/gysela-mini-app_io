@@ -1,0 +1,10 @@
+/build*/
+*.egg-info
+**/*.egg-info
+*.egg
+*.nc
+*.pyc
+/log.build.*
+/log.prepare.*
+*.dump
+compile_commands.json

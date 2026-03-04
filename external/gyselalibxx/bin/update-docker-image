@@ -1,0 +1,10 @@
+#!/bin/bash
+# SPDX-License-Identifier: MIT
+
+set -e
+
+cd "$(dirname "$0")"
+cd ../docker
+
+docker build -t jbigot/gyselalibxx_env gyselalibxx_env
+docker push jbigot/gyselalibxx_env

@@ -1,0 +1,126 @@
+name: GPU acceptance tests
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+    branches-ignore:
+      - main
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+    inputs:
+      merge_target:
+        description: "The branch to which this branch should be compared to filter out costly tests (default: devel)"
+        required: false
+        default: origin/devel
+        type: string
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  CHANGES_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || inputs.merge_target }}
+
+jobs:
+  pre_job:
+    name: 'Check for unnecessary runs'
+    runs-on: ubuntu-latest
+    if: github.repository == 'gyselax/gyselalibxx' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    # Map a step output to a job output
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: skip_check
+        uses: ./.github/actions/duplicate_check
+      - name: Wait
+        run: |
+          workflow_id=$(gh run list --commit ${{ env.SHA }} -w "Static Analyses" --json databaseId --jq '.[]["databaseId"]')
+          echo "Run id : ${workflow_id}"
+          if [ -n "${workflow_id}" ]
+          then
+            gh run watch ${workflow_id}
+          fi
+          # Wait 10 seconds in case job is cancelled
+          sleep 10
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  trigger_gpu_tests:
+    runs-on: ubuntu-latest
+    environment: 'GitLab GPU trigger'
+    needs: [pre_job]
+    if: ${{ needs.pre_job.outputs.should_skip == 'false' }}
+    steps:
+      - name: Checkout gyselalibxx
+        uses: actions/checkout@v4
+      - name: "Filter tests"
+        uses: ./.github/actions/test_filter
+      - name: "Send to persee"
+        run: |
+          git clone https://ci_bot:${GITLAB_PAT}@gitlab.maisondelasimulation.fr/gysela-developpers/gyselalibxx.git --single-branch --branch trigger_persee
+          cd gyselalibxx
+          git config --global user.name "GitHub CI Documentation builder"
+          git config --global user.email "username@users.noreply.github.com"
+          echo "${GITHUB_REPOSITORY}" > repo
+          echo "${{ env.SHA }}" > commit
+          git commit -m "Test commit ${{ env.SHA }}" repo commit
+          git push
+        shell: bash
+        env:
+          GITLAB_PAT: ${{secrets.GITLAB_PAT}}
+
+  pass_duplicate_gpu_tests:
+    runs-on: ubuntu-latest
+    needs: [pre_job]
+    if: ${{ needs.pre_job.outputs.should_skip == 'true' }}
+    steps:
+      - name: "Get bot token"
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: 1132905
+          private-key: ${{ secrets.BOT_PEM }}
+      - name: "Validate GPU using previous success"
+        run: |
+          curl -L -X POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Authorization: token ${{ steps.app-token.outputs.token }}" \
+            https://api.github.com/repos/${GITHUB_REPOSITORY}/check-runs \
+            -d "{\"name\":\"GPU Tests\",\"head_sha\":\"${{ env.SHA }}\",\"status\":\"completed\", \"conclusion\":\"success\",\"output\":{\"title\":\"GPU Test\",\"summary\":\"Previous success is still valid. Tests were not rerun\"}"
+
+
+  #gpu_tests:
+  #  runs-on: self-hosted
+  #  environment: development
+  #  steps:
+  #    - name: Checkout gyselalibxx
+  #      if: ${{ needs.pre_job.outputs.should_skip == 'false' }}
+  #      uses: actions/checkout@v4
+  #      with:
+  #        submodules: true
+  #    - name: "Filter tests"
+  #      if: ${{ needs.pre_job.outputs.should_skip == 'false' }}
+  #      uses: ./.github/actions/test_filter
+  #    - name: Setup environment
+  #      if: ${{ needs.pre_job.outputs.should_skip == 'false' }}
+  #      run: |
+  #        . toolchains/persee/v100/environment.sh
+  #      shell: bash
+  #    - name: Build code
+  #      if: ${{ needs.pre_job.outputs.should_skip == 'false' }}
+  #      uses: ./.github/actions/build_code
+  #      with:
+  #        toolchain: toolchains/persee/v100/toolchain.cmake
+  #    - name: Run tests
+  #      if: ${{ needs.pre_job.outputs.should_skip == 'false' }}
+  #      uses: ./.github/actions/run_tests

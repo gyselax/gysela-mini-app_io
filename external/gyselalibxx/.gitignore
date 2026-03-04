@@ -1,9 +1,0 @@
-/build*/
-*.pyc
-/log.build.*
-/log.prepare.*
-*.dump
-docs/mkdoc
-docs/*.log
-docs/site
-*.ctu-info

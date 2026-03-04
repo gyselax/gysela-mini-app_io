@@ -1,9 +1,0 @@
-#!/bin/bash
-# SPDX-License-Identifier: MIT
-
-
-cd "$(dirname "$0")"
-cd ..
-
-git submodule update --init
-git submodule sync

@@ -1,6 +1,0 @@
-mkdocs
-pymdown-extensions
-mkdocs-pdf
-mkdocs-include-dir-to-nav
-mkdoxy==1.2.8
-mkdocs-material

@@ -26,15 +26,10 @@ For more details see [Gyselalib++ environment toolchains](https://gyselax.github
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=external/gyselalibxx/toolchains/<MACHINE>/toolchain.cmake
 cmake --build build -j 4
 ```
-
-or for personal PC
+if you want to use Python insitu-diagnostics set additionally the `PYTHONPATH`:
 
 ```bash
-cmake -S . -B build-cpu -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-cmake --build build-cpu
-ln -s build-cpu/compile_commands.json compile_commands.json
-cd build-cpu
-ctest
+export PYTHONPATH=/home/PK282018/develop/gysela-mini-app_io/python:$PYTHONPATH
 ```
 
 ## Running
@@ -48,6 +43,7 @@ mpirun -n <nprocs> ./build/apps/gys_io <config.yaml> <pdi_config.yaml>
 ```bash
 mpirun -n 4 ./build/apps/gys_io apps/gys_io.yaml apps/pdi_default.yaml
 ```
+Note that `nprocs>1` works currently only with the version `"mpi_transpose"` switched on in the `apps/gys_io.yaml` yaml file. 
 
 ## Configuration
 
@@ -69,5 +65,5 @@ This mini application:
 
 - Initialises a 5D particle distribution function (species × toroidal coordinates × velocity space)
 - Writes the distribution function and mesh coordinates to HDF5 files
-- Computes fluid moments (density, mean velocity, temperature)
+- Computes fluid moments (density, mean velocity, temperature) via C++ integration or in-situ Python computation
 - Measures and saves CPU timing statistics

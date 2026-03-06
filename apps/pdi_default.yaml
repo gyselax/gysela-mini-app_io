@@ -121,6 +121,35 @@ data:
 
 plugins:
   mpi:
+  pycall:
+    on_event:
+      Init:
+        with: {}
+        exec: |
+          import xarray as xr
+          import numpy as np
+          from fluid_moments import FluidMoments
+      FluidMoments:
+        with: {fdistribu_raw: $fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
+        exec: |
+          fdistribu = xr.DataArray(
+              fdistribu_raw,
+              dims=('species', 'tor1', 'tor2', 'tor3', 'vpar', 'mu')
+          )
+          vpar = xr.DataArray(vpar_vals, dims=('vpar'))
+          mu = xr.DataArray(mu_vals, dims=('mu'))
+          fm = FluidMoments(vpar, mu)
+
+          density = fm.compute_density(fdistribu).compute()
+          velocity = fm.compute_velocity(fdistribu, density).compute()
+          temperature = fm.compute_temperature(fdistribu, density, velocity).compute()
+
+          ds_out = xr.Dataset({
+              'density': density,
+              'velocity': velocity,
+              'temperature': temperature,
+          })
+          ds_out.to_netcdf('fluid_moments.nc')
   decl_hdf5:
     #-- Read file names and expose them to PDI
     - file: '${gysela_io_filename}'

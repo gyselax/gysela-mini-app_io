@@ -34,4 +34,4 @@ SpeciesInfo:
     Upar_maxw: 3.0    # initial mean velocity
 
 Application: 
-  version: "mpi_transpose"  # "mpi_transpose"/"in-situ-diagnostic"
+  version: "in-situ-diagnostic"  # "mpi_transpose"/"in-situ-diagnostic"

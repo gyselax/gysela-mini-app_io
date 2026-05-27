@@ -68,7 +68,14 @@ clip_nonnegative = False
 ## Running the benchmark
 
 From the project root, build the mini-app first, then run:
+```bash
+python -m venv venv
+source ./venv/bin/activate
+python -m pip install -r apps/compression/requirements.txt
+```
 
+
+Then run:
 ```bash
 python apps/compression/launch_benchmark.py
 ```

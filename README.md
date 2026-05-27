@@ -29,7 +29,7 @@ cmake --build build -j 4
 if you want to use Python insitu-diagnostics set additionally the `PYTHONPATH`:
 
 ```bash
-export PYTHONPATH=/home/PK282018/develop/gysela-mini-app_io/python:$PYTHONPATH
+export PYTHONPATH=/path/to/your/repo/gysela-mini-app_io/python:$PYTHONPATH
 ```
 
 ## Running

@@ -449,13 +449,13 @@ int main(int argc, char **argv) {
    *   Main program: mini_app            *
    *
    ****************************************/
-  Kokkos::ScopeGuard scope(argc, argv);
-  ddc::ScopeGuard ddc_scope(argc, argv);
   MPI_Init(&argc, &argv);
   int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  Kokkos::ScopeGuard scope(argc, argv);
+  ddc::ScopeGuard ddc_scope(argc, argv);
   int n_iterations =
       1; // default number of iterations for in-situ diagnostics test
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   steady_clock::time_point time_points[6];
   std::vector<std::string> timing_names(6);
 

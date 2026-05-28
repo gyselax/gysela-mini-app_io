@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gysela-mini-app"
+version = "0.1.0"
+description = "Python utilities for GYSELA mini-apps"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "h5py",
+    "matplotlib",
+    "scikit-learn",
+    "PyYAML",
+    "xarray",
+    "dask",
+    "h5netcdf",
+    "netcdf4",
+    "tqdm",
+]
+
+[project.scripts]
+gysela-mini-app = "utils.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]

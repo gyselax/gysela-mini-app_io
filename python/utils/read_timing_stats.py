@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Read and display CPU timing statistics from HDF5 file."""
 
+<<<<<<< HEAD:python/read_timing_stats.py
+=======
+import argparse
+>>>>>>> origin/7-add-pyprojecttoml-and-organise-python-folder:python/utils/read_timing_stats.py
 import sys
 import h5py
 
@@ -49,6 +53,23 @@ def read_timing_stats(filename):
         sys.exit(1)
 
 
+def setup_parser(parser):
+    parser.add_argument(
+        "filename",
+        nargs="?",
+        default="cpu_time_stats.h5",
+        help="HDF5 timing file to read. Default: cpu_time_stats.h5",
+    )
+
+
+def main(args=None):
+    if args is None:
+        parser = argparse.ArgumentParser(description=__doc__)
+        setup_parser(parser)
+        args = parser.parse_args()
+
+    read_timing_stats(args.filename)
+
+
 if __name__ == "__main__":
-    filename = sys.argv[1] if len(sys.argv) > 1 else "cpu_time_stats.h5"
-    read_timing_stats(filename)
+    main()

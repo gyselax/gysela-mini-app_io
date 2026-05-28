@@ -94,15 +94,17 @@ void print_banner(int rank) {
 }
 
 int main(int argc, char **argv) {
-  Kokkos::ScopeGuard scope(argc, argv);
-  ddc::ScopeGuard ddc_scope(argc, argv);
+  ConfigHandles configs = parse_config_files(argc, argv);
+
   MPI_Init(&argc, &argv);
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
   print_banner(rank);
 
-  ConfigHandles configs = parse_config_files(argc, argv);
+  Kokkos::ScopeGuard scope(argc, argv);
+  ddc::ScopeGuard ddc_scope(argc, argv);
+
   PDI_init(configs.conf_pdi);
 
   // Reading config

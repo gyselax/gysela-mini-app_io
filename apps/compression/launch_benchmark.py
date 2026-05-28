@@ -20,10 +20,9 @@ BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out.yaml")
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Launch the compression benchmark pipeline."
-    )
+    parser = argparse.ArgumentParser(description="Launch the compression benchmark pipeline.")
 
     parser.add_argument(
         "run_dir",
@@ -117,6 +116,7 @@ def create_or_select_run_dir(requested_run_dir=None, overwrite=False):
 
     return run_dir
 
+
 def assert_file_exists(path, description):
     if not os.path.exists(path):
         raise RuntimeError(f"Missing {description}: {path}")
@@ -136,10 +136,7 @@ def read_benchmark_config(config):
         raise RuntimeError(f"Algorithm.nbiter must be positive. Got {iter_total}.")
 
     if compression_period <= 0:
-        raise RuntimeError(
-            f"CompressionBenchmark.compression_period must be positive. "
-            f"Got {compression_period}."
-        )
+        raise RuntimeError(f"CompressionBenchmark.compression_period must be positive. " f"Got {compression_period}.")
 
     if compression_period >= iter_total:
         raise RuntimeError(
@@ -156,9 +153,7 @@ def compute_diagnostic_step(config):
     nbstep_diag = int(time_diag / dt)
 
     if nbstep_diag <= 0:
-        raise RuntimeError(
-            f"Invalid diagnostic step: time_diag={time_diag}, deltat={dt}."
-        )
+        raise RuntimeError(f"Invalid diagnostic step: time_diag={time_diag}, deltat={dt}.")
 
     if abs(nbstep_diag * dt - time_diag) > 1e-12:
         raise RuntimeError(
@@ -182,8 +177,7 @@ def assert_iterations_are_diagnostic_outputs(
 
     if iter_total % nbstep_diag != 0:
         raise RuntimeError(
-            f"Algorithm.nbiter must be a multiple of nbstep_diag={nbstep_diag}. "
-            f"Got nbiter={iter_total}."
+            f"Algorithm.nbiter must be a multiple of nbstep_diag={nbstep_diag}. " f"Got nbiter={iter_total}."
         )
 
 
@@ -207,10 +201,7 @@ def assert_complete_branch(branch_dir, file_index_total):
 
 
 def compress_decompress(input_h5, output_h5, compressed_path):
-    print(
-        f"  [PCA Compression] "
-        f"{os.path.basename(input_h5)} -> {os.path.basename(output_h5)}"
-    )
+    print(f"  [PCA Compression] " f"{os.path.basename(input_h5)} -> {os.path.basename(output_h5)}")
     print(f"  [Compressed Payload] {os.path.basename(compressed_path)}")
 
     compressor = PCACompressor(
@@ -225,18 +216,9 @@ def compress_decompress(input_h5, output_h5, compressed_path):
         compressed_path=compressed_path,
     )
 
-    print(
-        "  PCA explained variance ratio sum = "
-        f"{metrics['explained_variance_ratio_sum']:.12e}"
-    )
-    print(
-        "  PCA relative L2 reconstruction error = "
-        f"{metrics['relative_l2_error']:.12e}"
-    )
-    print(
-        "  PCA max abs reconstruction error = "
-        f"{metrics['max_abs_error']:.12e}"
-    )
+    print("  PCA explained variance ratio sum = " f"{metrics['explained_variance_ratio_sum']:.12e}")
+    print("  PCA relative L2 reconstruction error = " f"{metrics['relative_l2_error']:.12e}")
+    print("  PCA max abs reconstruction error = " f"{metrics['max_abs_error']:.12e}")
 
     if metrics["compression_ratio"] is not None:
         print(f"  Compression ratio = {metrics['compression_ratio']:.6f}x")
@@ -273,10 +255,7 @@ def remove_restart_output_before_rewrite(
     nbstep_diag,
 ):
     if current_iter % nbstep_diag != 0:
-        raise RuntimeError(
-            f"Restart iteration {current_iter} is not aligned with "
-            f"nbstep_diag={nbstep_diag}."
-        )
+        raise RuntimeError(f"Restart iteration {current_iter} is not aligned with " f"nbstep_diag={nbstep_diag}.")
 
     file_index = current_iter // nbstep_diag
 
@@ -286,10 +265,7 @@ def remove_restart_output_before_rewrite(
     )
 
     if os.path.exists(filepath):
-        print(
-            f"  [Restart Output Refresh] Removing existing "
-            f"{os.path.basename(filepath)} before restart rewrite"
-        )
+        print(f"  [Restart Output Refresh] Removing existing " f"{os.path.basename(filepath)} before restart rewrite")
         os.remove(filepath)
 
 
@@ -400,10 +376,7 @@ def run_periodic_compressed_branch(
             )
 
         run_sim(
-            branch_name=(
-                f"Compressed segment {segment_id} "
-                f"({current_iter} -> {next_iter})"
-            ),
+            branch_name=(f"Compressed segment {segment_id} " f"({current_iter} -> {next_iter})"),
             gysela_yaml=yaml_segment,
             pdi_yaml=run_pdi_yaml,
             work_dir=dir_compressed,
@@ -428,8 +401,7 @@ def run_periodic_compressed_branch(
 
         if current_iter % nbstep_diag != 0:
             raise RuntimeError(
-                f"Cannot compress at iteration {current_iter}: "
-                f"not a multiple of nbstep_diag={nbstep_diag}."
+                f"Cannot compress at iteration {current_iter}: " f"not a multiple of nbstep_diag={nbstep_diag}."
             )
 
         file_index = current_iter // nbstep_diag
@@ -462,53 +434,32 @@ def run_periodic_compressed_branch(
             compressed_path=compressed_payload,
         )
 
-        approx_restart_size = (
-            os.path.getsize(approx_restart)
-            if os.path.exists(approx_restart)
-            else None
+        approx_restart_size = os.path.getsize(approx_restart) if os.path.exists(approx_restart) else None
+
+        compressed_payload_size = os.path.getsize(compressed_payload) if os.path.exists(compressed_payload) else None
+
+        compression_events.append(
+            {
+                "segment_id": segment_id,
+                "iteration": current_iter,
+                "file_index": file_index,
+                "branch_restart": os.path.relpath(raw_restart, run_dir),
+                "approx_restart": os.path.relpath(approx_restart, run_dir),
+                "compressed_payload": (os.path.relpath(compressed_payload, run_dir) if keep_payloads else None),
+                "n_components": PCA_N_COMPONENTS,
+                "raw_restart_size": raw_restart_size,
+                "approx_restart_size": approx_restart_size,
+                "compressed_payload_size": compressed_payload_size,
+                "explained_variance_ratio_sum": float(metrics["explained_variance_ratio_sum"]),
+                "relative_l2_error": float(metrics["relative_l2_error"]),
+                "max_abs_error": float(metrics["max_abs_error"]),
+                "compression_ratio": (
+                    None if metrics["compression_ratio"] is None else float(metrics["compression_ratio"])
+                ),
+                "approx_restart_kept": keep_restart_approximations,
+                "compressed_payload_kept": keep_payloads,
+            }
         )
-
-        compressed_payload_size = (
-            os.path.getsize(compressed_payload)
-            if os.path.exists(compressed_payload)
-            else None
-        )
-
-        compression_events.append({
-            "segment_id": segment_id,
-            "iteration": current_iter,
-            "file_index": file_index,
-
-            "branch_restart": os.path.relpath(raw_restart, run_dir),
-
-            "approx_restart": os.path.relpath(approx_restart, run_dir),
-
-            "compressed_payload": (
-                os.path.relpath(compressed_payload, run_dir)
-                if keep_payloads
-                else None
-            ),
-
-            "n_components": PCA_N_COMPONENTS,
-
-            "raw_restart_size": raw_restart_size,
-            "approx_restart_size": approx_restart_size,
-            "compressed_payload_size": compressed_payload_size,
-
-            "explained_variance_ratio_sum": float(
-                metrics["explained_variance_ratio_sum"]
-            ),
-            "relative_l2_error": float(metrics["relative_l2_error"]),
-            "max_abs_error": float(metrics["max_abs_error"]),
-            "compression_ratio": (
-                None
-                if metrics["compression_ratio"] is None
-                else float(metrics["compression_ratio"])
-            ),
-
-            "approx_restart_kept": keep_restart_approximations,
-            "compressed_payload_kept": keep_payloads,
-        })
 
         if not keep_payloads:
             remove_file_if_exists(

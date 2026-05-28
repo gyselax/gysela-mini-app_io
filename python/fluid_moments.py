@@ -1,5 +1,3 @@
-import xarray as xr
-
 # -------------------------------------------------
 # 1. Quadrature
 # -------------------------------------------------
@@ -18,6 +16,7 @@ def get_trapezoid_weights_1d(coord):
 
     return weights.fillna(0.0).where(coord != coord[0], first_dx).where(coord != coord[-1], last_dx)
 
+
 # -------------------------------------------------
 # 2. FluidMoments Class
 # -------------------------------------------------
@@ -25,10 +24,10 @@ class FluidMoments:
     def __init__(self, vpar_coord, mu_coord):
         self.vpar = vpar_coord
         self.mu = mu_coord
-        
+
         w_vpar = get_trapezoid_weights_1d(vpar_coord)
         w_mu = get_trapezoid_weights_1d(mu_coord)
-        
+
         self.weights = w_vpar * w_mu
 
     def compute_density(self, f):
@@ -39,5 +38,5 @@ class FluidMoments:
         return momentum / density
 
     def compute_temperature(self, f, density, velocity):
-        diff2 = (self.vpar - velocity)**2
+        diff2 = (self.vpar - velocity) ** 2
         return (f * diff2 * self.weights).sum(dim=("vpar", "mu")) / density

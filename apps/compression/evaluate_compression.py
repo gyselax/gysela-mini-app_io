@@ -39,15 +39,13 @@ class Landau2X2VMoments:
         if len(f_shape) != 4:
             location = f" in {filepath}" if filepath is not None else ""
             raise RuntimeError(
-                f"Unexpected fdistribu rank{location}: {f_shape}. "
-                "Expected shape (Nx, Ny, Nvx, Nvy) for one species."
+                f"Unexpected fdistribu rank{location}: {f_shape}. " "Expected shape (Nx, Ny, Nvx, Nvy) for one species."
             )
 
         if tuple(f_shape) != self.expected_f_shape:
             location = f" in {filepath}" if filepath is not None else ""
             raise RuntimeError(
-                f"Unexpected fdistribu shape{location}: {f_shape}. "
-                f"Expected {self.expected_f_shape}."
+                f"Unexpected fdistribu shape{location}: {f_shape}. " f"Expected {self.expected_f_shape}."
             )
 
     def compute_distribution_moments(self, f):
@@ -68,35 +66,31 @@ class Landau2X2VMoments:
         momentum_y = np.dot(f_vy, self.vy) * self.dV_4D
         momentum_norm = np.sqrt(momentum_x**2 + momentum_y**2)
 
-        kinetic_energy = 0.5 * (
-            np.dot(f_vx, self.vx2)
-            + np.dot(f_vy, self.vy2)
-        ) * self.dV_4D
+        kinetic_energy = 0.5 * (np.dot(f_vx, self.vx2) + np.dot(f_vy, self.vy2)) * self.dV_4D
 
         return mass, momentum_x, momentum_y, momentum_norm, kinetic_energy
 
     def compute_potential_energy(self, phi):
         if phi.shape != (self.x.size, self.y.size):
             raise RuntimeError(
-                f"Unexpected electrostatic_potential shape: {phi.shape}. "
-                f"Expected {(self.x.size, self.y.size)}."
+                f"Unexpected electrostatic_potential shape: {phi.shape}. " f"Expected {(self.x.size, self.y.size)}."
             )
 
-        dphi_dx = (
-            np.roll(phi, -1, axis=0) - np.roll(phi, 1, axis=0)
-        ) / (2.0 * self.dx)
+        dphi_dx = (np.roll(phi, -1, axis=0) - np.roll(phi, 1, axis=0)) / (2.0 * self.dx)
 
-        dphi_dy = (
-            np.roll(phi, -1, axis=1) - np.roll(phi, 1, axis=1)
-        ) / (2.0 * self.dy)
+        dphi_dy = (np.roll(phi, -1, axis=1) - np.roll(phi, 1, axis=1)) / (2.0 * self.dy)
 
         electric_field_x = -dphi_dx
         electric_field_y = -dphi_dy
 
-        return 0.5 * np.sum(
-            electric_field_x**2 + electric_field_y**2,
-            dtype=np.float64,
-        ) * self.dV_2D
+        return (
+            0.5
+            * np.sum(
+                electric_field_x**2 + electric_field_y**2,
+                dtype=np.float64,
+            )
+            * self.dV_2D
+        )
 
     def compute_file_diagnostics(self, filepath, dt, nbstep_diag):
         file_idx = get_file_index(filepath)
@@ -136,10 +130,9 @@ class Landau2X2VMoments:
             "E_pot": potential_energy,
         }
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluate compression benchmark results."
-    )
+    parser = argparse.ArgumentParser(description="Evaluate compression benchmark results.")
 
     parser.add_argument(
         "run_dir",
@@ -151,10 +144,10 @@ def parse_args():
         ),
     )
     parser.add_argument(
-    "--workers",
-    type=int,
-    default=4,
-    help=(
+        "--workers",
+        type=int,
+        default=4,
+        help=(
             "Number of parallel workers used to process HDF5 files. "
             "Use 1 for serial execution. A value between 2 and 4 is usually safe "
             "on shared filesystems."
@@ -246,8 +239,7 @@ def assert_period_is_diagnostic_output(
 
     if iter_total % nbstep_diag != 0:
         raise RuntimeError(
-            f"Algorithm.nbiter must be a multiple of nbstep_diag={nbstep_diag}. "
-            f"Got nbiter={iter_total}."
+            f"Algorithm.nbiter must be a multiple of nbstep_diag={nbstep_diag}. " f"Got nbiter={iter_total}."
         )
 
 
@@ -290,10 +282,7 @@ def list_branch_h5_files(branch_dir):
 
         files.append((idx, filepath))
 
-    return [
-        filepath
-        for _, filepath in sorted(files, key=lambda item: item[0])
-    ]
+    return [filepath for _, filepath in sorted(files, key=lambda item: item[0])]
 
 
 def process_branch(
@@ -314,10 +303,7 @@ def process_branch(
     if max_workers is None:
         max_workers = min(4, os.cpu_count() or 1)
 
-    print(
-        f"Processing {os.path.basename(branch_dir)} with "
-        f"{len(files)} files using {max_workers} workers"
-    )
+    print(f"Processing {os.path.basename(branch_dir)} with " f"{len(files)} files using {max_workers} workers")
 
     worker_args = [
         (
@@ -335,20 +321,13 @@ def process_branch(
     data = {}
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(compute_file_diagnostics_worker, args)
-            for args in worker_args
-        ]
+        futures = [executor.submit(compute_file_diagnostics_worker, args) for args in worker_args]
 
         for counter, future in enumerate(as_completed(futures), start=1):
             idx, diagnostics = future.result()
             data[idx] = diagnostics
 
-            print(
-                f"  [{os.path.basename(branch_dir)}] "
-                f"{counter}/{len(files)} done: "
-                f"GYSELALIBXX_{idx:05d}.h5"
-            )
+            print(f"  [{os.path.basename(branch_dir)}] " f"{counter}/{len(files)} done: " f"GYSELALIBXX_{idx:05d}.h5")
 
     return data
 
@@ -357,25 +336,24 @@ def build_timeline(sequence_tuples):
     timeline = []
 
     for data_dict, start_idx, end_idx in sequence_tuples:
-        valid_indices = sorted(
-            idx for idx in data_dict.keys()
-            if start_idx <= idx <= end_idx
-        )
+        valid_indices = sorted(idx for idx in data_dict.keys() if start_idx <= idx <= end_idx)
 
         for idx in valid_indices:
             step = data_dict[idx]
 
-            timeline.append({
-                "idx": idx,
-                "time": step["time"],
-                "M": step["M"],
-                "Px": step["Px"],
-                "Py": step["Py"],
-                "P": step["P"],
-                "E_kin": step["E_kin"],
-                "E_pot": step["E_pot"],
-                "E_tot": step["E_kin"] + step["E_pot"],
-            })
+            timeline.append(
+                {
+                    "idx": idx,
+                    "time": step["time"],
+                    "M": step["M"],
+                    "Px": step["Px"],
+                    "Py": step["Py"],
+                    "P": step["P"],
+                    "E_kin": step["E_kin"],
+                    "E_pot": step["E_pot"],
+                    "E_tot": step["E_kin"] + step["E_pot"],
+                }
+            )
 
     timeline = sorted(timeline, key=lambda step: step["idx"])
 
@@ -391,10 +369,7 @@ def build_timeline(sequence_tuples):
         "E_tot",
     ]
 
-    return {
-        key: np.array([step[key] for step in timeline])
-        for key in keys
-    }
+    return {key: np.array([step[key] for step in timeline]) for key in keys}
 
 
 def assert_same_timeline(branches):
@@ -403,20 +378,13 @@ def assert_same_timeline(branches):
 
     for name, data in branches.items():
         if len(data["idx"]) != len(reference_indices):
-            raise RuntimeError(
-                f"{name} has {len(data['idx'])} outputs, "
-                f"but baseline has {len(reference_indices)}."
-            )
+            raise RuntimeError(f"{name} has {len(data['idx'])} outputs, " f"but baseline has {len(reference_indices)}.")
 
         if not np.array_equal(data["idx"], reference_indices):
-            raise RuntimeError(
-                f"{name} does not share the same diagnostic file indices as baseline."
-            )
+            raise RuntimeError(f"{name} does not share the same diagnostic file indices as baseline.")
 
         if not np.allclose(data["time"], reference_time):
-            raise RuntimeError(
-                f"{name} does not share the same time grid as baseline."
-            )
+            raise RuntimeError(f"{name} does not share the same time grid as baseline.")
 
 
 def load_mesh_and_time_info(latest_run):
@@ -484,10 +452,7 @@ def event_value(event, key):
 
 
 def find_event_with_max_metric(compression_events, metric_name):
-    valid_events = [
-        event for event in compression_events
-        if event_value(event, metric_name) is not None
-    ]
+    valid_events = [event for event in compression_events if event_value(event, metric_name) is not None]
 
     if not valid_events:
         return None
@@ -544,83 +509,46 @@ def compute_compression_stats(latest_run, compression_events):
 
     if raw_restart_size is not None and compressed_payload_size is not None:
         compressed_change = compressed_payload_size - raw_restart_size
-        compressed_change_percent = (
-            100.0 * compressed_change / raw_restart_size
-        )
+        compressed_change_percent = 100.0 * compressed_change / raw_restart_size
 
     approx_change = None
     approx_change_percent = None
 
     if raw_restart_size is not None and approx_restart_size is not None:
         approx_change = approx_restart_size - raw_restart_size
-        approx_change_percent = (
-            100.0 * approx_change / raw_restart_size
-        )
+        approx_change_percent = 100.0 * approx_change / raw_restart_size
 
-    worst_l2_error = (
-        None if worst_l2_event is None
-        else event_value(worst_l2_event, "relative_l2_error")
-    )
-    worst_max_abs_error = (
-        None if worst_max_abs_event is None
-        else event_value(worst_max_abs_event, "max_abs_error")
-    )
+    worst_l2_error = None if worst_l2_event is None else event_value(worst_l2_event, "relative_l2_error")
+    worst_max_abs_error = None if worst_max_abs_event is None else event_value(worst_max_abs_event, "max_abs_error")
 
     result = {
-        "label": (
-            f"{len(compression_events)} compression events, "
-            f"last iter {int(last_event['iteration'])}"
-        ),
+        "label": (f"{len(compression_events)} compression events, " f"last iter {int(last_event['iteration'])}"),
         "iteration": int(last_event["iteration"]),
         "file_index": int(last_event["file_index"]),
         "available": True,
-
         "raw_restart_size": raw_restart_size,
         "approx_restart_size": approx_restart_size,
         "compressed_payload_size": compressed_payload_size,
-
         "compression_ratio": compression_ratio,
         "compressed_change": compressed_change,
         "compressed_change_percent": compressed_change_percent,
-
         "approx_change": approx_change,
         "approx_change_percent": approx_change_percent,
-
         # Worst-case reconstruction metrics over all compression events.
         "relative_l2_error": worst_l2_error,
         "max_abs_error": worst_max_abs_error,
-
-        "worst_relative_l2_iteration": (
-            None if worst_l2_event is None
-            else int(worst_l2_event["iteration"])
-        ),
-        "worst_relative_l2_file_index": (
-            None if worst_l2_event is None
-            else int(worst_l2_event["file_index"])
-        ),
-        "worst_max_abs_iteration": (
-            None if worst_max_abs_event is None
-            else int(worst_max_abs_event["iteration"])
-        ),
-        "worst_max_abs_file_index": (
-            None if worst_max_abs_event is None
-            else int(worst_max_abs_event["file_index"])
-        ),
-
+        "worst_relative_l2_iteration": (None if worst_l2_event is None else int(worst_l2_event["iteration"])),
+        "worst_relative_l2_file_index": (None if worst_l2_event is None else int(worst_l2_event["file_index"])),
+        "worst_max_abs_iteration": (None if worst_max_abs_event is None else int(worst_max_abs_event["iteration"])),
+        "worst_max_abs_file_index": (None if worst_max_abs_event is None else int(worst_max_abs_event["file_index"])),
         "worst_compression_ratio": (
-            None if worst_ratio_event is None
-            else event_value(worst_ratio_event, "compression_ratio")
+            None if worst_ratio_event is None else event_value(worst_ratio_event, "compression_ratio")
         ),
         "worst_compression_ratio_iteration": (
-            None if worst_ratio_event is None
-            else int(worst_ratio_event["iteration"])
+            None if worst_ratio_event is None else int(worst_ratio_event["iteration"])
         ),
-
-        "explained_variance_ratio_sum": last_event.get(
-            "explained_variance_ratio_sum"
-        ),
+        "explained_variance_ratio_sum": last_event.get("explained_variance_ratio_sum"),
         "n_components": last_event.get("n_components"),
-
         "metrics_source": "compression_events.yaml",
         "approx_restart_kept": last_event.get("approx_restart_kept"),
         "compressed_payload_kept": last_event.get("compressed_payload_kept"),
@@ -629,6 +557,7 @@ def compute_compression_stats(latest_run, compression_events):
     stats.append(result)
 
     return stats
+
 
 def format_compression_stats(stats):
     lines = [
@@ -645,11 +574,7 @@ def format_compression_stats(stats):
         lines.append("")
 
         components = item.get("n_components")
-        component_text = (
-            f", PCA components: {components}"
-            if components is not None
-            else ""
-        )
+        component_text = f", PCA components: {components}" if components is not None else ""
 
         lines.append(f"{item['label']}{component_text}")
 
@@ -664,26 +589,19 @@ def format_compression_stats(stats):
             )
         elif compressed_size is not None:
             lines.append(
-                f"  Raw restart:      unavailable    "
-                f"Compressed PCA: {bytes_to_human(compressed_size):>10}"
+                f"  Raw restart:      unavailable    " f"Compressed PCA: {bytes_to_human(compressed_size):>10}"
             )
         else:
             lines.append("  File sizes: unavailable")
 
         if approx_size is not None:
-            lines.append(
-                f"  Approx restart:   {bytes_to_human(approx_size):>10}"
-            )
+            lines.append(f"  Approx restart:   {bytes_to_human(approx_size):>10}")
 
         compression_ratio = item.get("compression_ratio")
         compressed_change = item.get("compressed_change")
         compressed_change_percent = item.get("compressed_change_percent")
 
-        if (
-            compression_ratio is not None
-            and compressed_change is not None
-            and compressed_change_percent is not None
-        ):
+        if compression_ratio is not None and compressed_change is not None and compressed_change_percent is not None:
             lines.append(
                 f"Compression ratio: {compression_ratio:.3f}x "
                 f"({bytes_to_human(compressed_change)}, "
@@ -697,10 +615,7 @@ def format_compression_stats(stats):
         explained_variance_ratio_sum = item.get("explained_variance_ratio_sum")
 
         if explained_variance_ratio_sum is not None:
-            lines.append(
-                "  Explained variance ratio sum: "
-                f"{explained_variance_ratio_sum:.6e}"
-            )
+            lines.append("  Explained variance ratio sum: " f"{explained_variance_ratio_sum:.6e}")
 
         relative_l2_error = item.get("relative_l2_error")
         max_abs_error = item.get("max_abs_error")
@@ -715,9 +630,7 @@ def format_compression_stats(stats):
                 else ""
             )
 
-            lines.append(
-                f"  Worst relative L2 error: {relative_l2_error:.3e}{location}"
-            )
+            lines.append(f"  Worst relative L2 error: {relative_l2_error:.3e}{location}")
         else:
             lines.append("  Worst relative L2 error: unavailable")
 
@@ -731,9 +644,7 @@ def format_compression_stats(stats):
                 else ""
             )
 
-            lines.append(
-                f"  Worst max abs error:    {max_abs_error:.3e}{location}"
-            )
+            lines.append(f"  Worst max abs error:    {max_abs_error:.3e}{location}")
         else:
             lines.append("  Worst max abs error: unavailable")
 
@@ -741,11 +652,7 @@ def format_compression_stats(stats):
         payload_kept = item.get("compressed_payload_kept")
 
         if approx_kept is not None or payload_kept is not None:
-            lines.append(
-                "  Restart artifacts kept: "
-                f"approx={bool(approx_kept)}, "
-                f"payload={bool(payload_kept)}"
-            )
+            lines.append("  Restart artifacts kept: " f"approx={bool(approx_kept)}, " f"payload={bool(payload_kept)}")
 
         metrics_source = item.get("metrics_source")
 
@@ -782,28 +689,16 @@ def add_compression_markers(axs, compression_times):
 def compute_relative_errors_vs_baseline(branch, baseline):
     eps = 1e-30
 
-    rel_total_energy = (
-        np.abs(branch["E_tot"] - baseline["E_tot"])
-        / np.maximum(np.abs(baseline["E_tot"]), eps)
-    )
+    rel_total_energy = np.abs(branch["E_tot"] - baseline["E_tot"]) / np.maximum(np.abs(baseline["E_tot"]), eps)
 
-    rel_potential_energy = (
-        np.abs(branch["E_pot"] - baseline["E_pot"])
-        / np.maximum(np.abs(baseline["E_pot"]), eps)
-    )
+    rel_potential_energy = np.abs(branch["E_pot"] - baseline["E_pot"]) / np.maximum(np.abs(baseline["E_pot"]), eps)
 
-    rel_mass = (
-        np.abs(branch["M"] - baseline["M"])
-        / np.maximum(np.abs(baseline["M"]), eps)
-    )
+    rel_mass = np.abs(branch["M"] - baseline["M"]) / np.maximum(np.abs(baseline["M"]), eps)
 
     delta_px = branch["Px"] - baseline["Px"]
     delta_py = branch["Py"] - baseline["Py"]
 
-    rel_momentum = (
-        np.sqrt(delta_px**2 + delta_py**2)
-        / np.maximum(np.abs(baseline["M"]), eps)
-    )
+    rel_momentum = np.sqrt(delta_px**2 + delta_py**2) / np.maximum(np.abs(baseline["M"]), eps)
 
     return {
         "time": baseline["time"],
@@ -927,23 +822,14 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
         color = colors[name]
         linestyle = linestyles[name]
 
-        total_energy_variation = (
-            np.abs(data["E_tot"] - energy_0)
-            / abs(energy_0)
-        )
+        total_energy_variation = np.abs(data["E_tot"] - energy_0) / abs(energy_0)
 
         delta_px = data["Px"] - px_0
         delta_py = data["Py"] - py_0
 
-        momentum_variation = (
-            np.sqrt(delta_px**2 + delta_py**2)
-            / abs(mass_0)
-        )
+        momentum_variation = np.sqrt(delta_px**2 + delta_py**2) / abs(mass_0)
 
-        mass_variation = (
-            np.abs(data["M"] - mass_0)
-            / abs(mass_0)
-        )
+        mass_variation = np.abs(data["M"] - mass_0) / abs(mass_0)
 
         main_axes[0].plot(
             t,
@@ -991,16 +877,10 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
     add_compression_markers(all_plot_axes, compression_times)
 
     main_axes[0].set_ylabel(r"$\mathcal{E}_{tot}$")
-    main_axes[0].set_title(
-        r"Total Energy: "
-        r"$\mathcal{E}_{tot} = \mathcal{E}_{kin} + \mathcal{E}_{pot}$"
-    )
+    main_axes[0].set_title(r"Total Energy: " r"$\mathcal{E}_{tot} = \mathcal{E}_{kin} + \mathcal{E}_{pot}$")
 
     main_axes[1].set_ylabel(r"$\mathcal{E}_{pot}$")
-    main_axes[1].set_title(
-        r"Potential Energy: "
-        r"$\mathcal{E}_{pot} = \frac{1}{2}\int |E|^2\,dx\,dy$"
-    )
+    main_axes[1].set_title(r"Potential Energy: " r"$\mathcal{E}_{pot} = \frac{1}{2}\int |E|^2\,dx\,dy$")
 
     main_axes[2].set_ylabel(r"$|\Delta \mathcal{E}| / \mathcal{E}_0$")
     main_axes[2].set_title("Total Energy Variation")
@@ -1088,18 +968,19 @@ def main():
     )
 
     branches = {
-        "Baseline": build_timeline([
-            (raw_baseline, 0, file_index_total),
-        ]),
-        "Compressed": build_timeline([
-            (raw_compressed, 0, file_index_total),
-        ]),
+        "Baseline": build_timeline(
+            [
+                (raw_baseline, 0, file_index_total),
+            ]
+        ),
+        "Compressed": build_timeline(
+            [
+                (raw_compressed, 0, file_index_total),
+            ]
+        ),
     }
 
-    compression_times = [
-        int(event["iteration"]) * dt
-        for event in compression_events
-    ]
+    compression_times = [int(event["iteration"]) * dt for event in compression_events]
 
     plot_analysis(
         branches=branches,

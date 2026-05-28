@@ -67,10 +67,7 @@ class PCACompressor:
         f = np.asarray(f, dtype=np.float64)
 
         if f.ndim != 5:
-            raise ValueError(
-                "Expected fdistribu with rank 5 "
-                f"(Nspecies, Nx, Ny, Nvx, Nvy), got shape {f.shape}."
-            )
+            raise ValueError("Expected fdistribu with rank 5 " f"(Nspecies, Nx, Ny, Nvx, Nvy), got shape {f.shape}.")
 
         original_shape = f.shape
         n_species, nx, ny, nvx, nvy = original_shape
@@ -129,16 +126,14 @@ class PCACompressor:
             return X
 
         if normalization == "log":
-            return 10.0 ** X
+            return 10.0**X
 
         if normalization == "asinh":
             return alpha * np.sinh(X)
 
         if normalization == "zscore":
             if scaler_mean is None or scaler_scale is None:
-                raise RuntimeError(
-                    "Z-score inverse preprocessing requires scaler_mean and scaler_scale."
-                )
+                raise RuntimeError("Z-score inverse preprocessing requires scaler_mean and scaler_scale.")
 
             return X * scaler_scale + scaler_mean
 
@@ -383,11 +378,7 @@ class PCACompressor:
 
         original_norm = np.linalg.norm(f_original.ravel())
 
-        relative_l2_error = (
-            np.linalg.norm(diff.ravel()) / original_norm
-            if original_norm > 0.0
-            else np.nan
-        )
+        relative_l2_error = np.linalg.norm(diff.ravel()) / original_norm if original_norm > 0.0 else np.nan
 
         max_abs_error = np.max(np.abs(diff))
 
@@ -401,9 +392,7 @@ class PCACompressor:
 
         compression_ratio = (
             original_size / compressed_size
-            if original_size is not None
-            and compressed_size is not None
-            and compressed_size > 0
+            if original_size is not None and compressed_size is not None and compressed_size > 0
             else None
         )
 
@@ -414,9 +403,7 @@ class PCACompressor:
             "n_components": self.n_components,
             "normalization": self.normalization,
             "explained_variance_ratio_sum": (
-                float(np.sum(self.model.explained_variance_ratio_))
-                if self.model is not None
-                else None
+                float(np.sum(self.model.explained_variance_ratio_)) if self.model is not None else None
             ),
             "relative_l2_error": float(relative_l2_error),
             "max_abs_error": float(max_abs_error),

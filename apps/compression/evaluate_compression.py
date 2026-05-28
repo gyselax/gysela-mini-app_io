@@ -3,6 +3,7 @@ import glob
 import os
 import re
 
+from tqdm import tqdm
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
@@ -321,16 +322,24 @@ def process_branch(
     data = {}
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(compute_file_diagnostics_worker, args) for args in worker_args]
+        futures = [
+            executor.submit(compute_file_diagnostics_worker, args)
+            for args in worker_args
+        ]
 
-        for counter, future in enumerate(as_completed(futures), start=1):
-            idx, diagnostics = future.result()
-            data[idx] = diagnostics
+        branch_label = os.path.basename(branch_dir)
 
-            print(f"  [{os.path.basename(branch_dir)}] " f"{counter}/{len(files)} done: " f"GYSELALIBXX_{idx:05d}.h5")
+        with tqdm(
+            total=len(files),
+            desc=f"Processing {branch_label}",
+            unit="file",
+        ) as progress:
+            for future in as_completed(futures):
+                idx, diagnostics = future.result()
+                data[idx] = diagnostics
+                progress.update(1)
 
     return data
-
 
 def build_timeline(sequence_tuples):
     timeline = []
@@ -523,9 +532,6 @@ def compute_compression_stats(latest_run, compression_events):
 
     result = {
         "label": (f"{len(compression_events)} compression events, " f"last iter {int(last_event['iteration'])}"),
-        "iteration": int(last_event["iteration"]),
-        "file_index": int(last_event["file_index"]),
-        "available": True,
         "raw_restart_size": raw_restart_size,
         "approx_restart_size": approx_restart_size,
         "compressed_payload_size": compressed_payload_size,
@@ -647,17 +653,6 @@ def format_compression_stats(stats):
             lines.append(f"  Worst max abs error:    {max_abs_error:.3e}{location}")
         else:
             lines.append("  Worst max abs error: unavailable")
-
-        approx_kept = item.get("approx_restart_kept")
-        payload_kept = item.get("compressed_payload_kept")
-
-        if approx_kept is not None or payload_kept is not None:
-            lines.append("  Restart artifacts kept: " f"approx={bool(approx_kept)}, " f"payload={bool(payload_kept)}")
-
-        metrics_source = item.get("metrics_source")
-
-        if metrics_source is not None:
-            lines.append(f"  Metrics source: {metrics_source}")
 
     return "\n".join(lines)
 
@@ -938,19 +933,6 @@ def main():
     print(f"Using compression_period  = {compression_period}")
     print(f"Using iter_total          = {iter_total}")
     print(f"Compression events found  = {len(compression_events)}")
-
-    if compression_stats:
-        stat = compression_stats[0]
-        print(
-            "Representative compression stats event: "
-            f"iteration={stat['iteration']}, "
-            f"file_index={stat['file_index']:05d}, "
-            f"available={stat['available']}"
-        )
-
-        if not stat["available"]:
-            for missing in stat.get("missing_files", []):
-                print(f"  Missing {missing}")
 
     raw_baseline = process_branch(
         branch_dir=os.path.join(latest_run, "branch_baseline"),

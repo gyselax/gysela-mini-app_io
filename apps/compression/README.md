@@ -1,11 +1,6 @@
-# Compression benchmark mini-application
+# GYSELA Compression Mini App
 
-This directory contains a benchmark pipeline for evaluating restart-file compression in the 2D2V Landau damping mini-application.  The workflow is implemented in `apps/compression` and compares a reference, uninterrupted simulation against a segmented simulation that periodically compresses and decompresses the distribution function before restarting.
-
-The pipeline is intended to answer two questions:
-
-1. How much storage can be saved by compressing restart states with PCA?
-2. How much does the compression perturb physically relevant diagnostics such as mass, momentum and energy?
+This directory contains a benchmark pipeline for evaluating restart-file compression in the 2D2V Landau damping mini-application.  The workflow compares a reference, uninterrupted simulation against a segmented simulation that periodically compresses and decompresses the distribution function before restarting.
 
 ## Main files
 
@@ -37,33 +32,7 @@ compression_run_YYYYMMDD_HHMMSS/
 
 The baseline branch is run once from the analytic initial condition for the full number of iterations.
 
-The compressed branch is run segment by segment. At the end of each segment, except the final one, the current restart file is compressed with PCA and immediately reconstructed into an approximate HDF5 restart. The next segment restarts from that approximation.
-
-## PCA representation
-
-The compressor expects the restart distribution dataset to have the layout
-
-```text
-fdistribu[species, x, y, vx, vy]
-```
-
-For PCA, the five-dimensional array is reshaped into a two-dimensional matrix:
-
-```text
-rows    = species * x * y
-columns = vx * vy
-```
-
-Each spatial/species point is therefore treated as one sample, and the local velocity-space distribution is compressed along the velocity dimensions.
-
-The default launcher uses:
-
-```python
-PCA_N_COMPONENTS = 8
-normalization = "none"
-clip_nonnegative = False
-```
-
+The compressed branch is run segment by segment. At the end of each segment, except the final one, the current restart file is compressed with your favourite method and immediately reconstructed into an approximate HDF5 restart. The next segment restarts from that approximation.
 
 ## Running the benchmark
 
@@ -89,7 +58,7 @@ compression_run_YYYYMMDD_HHMMSS
 You can also provide an explicit output directory:
 
 ```bash
-python3 apps/compression/launch_benchmark.py compression_run_pca4
+python apps/compression/launch_benchmark.py compression_run_pca4
 ```
 
 The launcher executes the compiled application through MPI:
@@ -103,7 +72,7 @@ Adjust `EXEC_CMD` in `launch_benchmark.py` if the number of ranks or executable 
 ## Launcher options
 
 ```bash
-python3 apps/compression/launch_benchmark.py [run_dir] [options]
+python apps/compression/launch_benchmark.py [run_dir] [options]
 ```
 
 | Option | Description |
@@ -208,6 +177,31 @@ The analysis figure contains:
 6. relative errors against the baseline
 
 Compression events are shown as triangular markers along the time axis.
+
+## PCA representation
+
+The compressor expects the restart distribution dataset to have the layout
+
+```text
+fdistribu[species, x, y, vx, vy]
+```
+
+For PCA, the five-dimensional array is reshaped into a two-dimensional matrix:
+
+```text
+rows    = species * x * y
+columns = vx * vy
+```
+
+Each spatial/species point is therefore treated as one sample, and the local velocity-space distribution is compressed along the velocity dimensions.
+
+The default launcher uses:
+
+```python
+PCA_N_COMPONENTS = 8
+normalization = "none"
+clip_nonnegative = False
+```
 
 
 ## Minimal reproducibility checklist

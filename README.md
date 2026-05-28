@@ -1,4 +1,4 @@
-# Gysela Mini App I/O
+# Gysela Mini Apps
 
 A minimal application demonstrating GYSELA I/O operations and testing the CPU performance scaling for 5D particle distribution functions.
 
@@ -22,11 +22,21 @@ For more details see [Gyselalib++ environment toolchains](https://gyselax.github
 
 ## Building
 
+By default, both apps are built:
+
+- IO app
+- Compression app
+
+You can disable either app at configuration time using CMake options:
+
 ```bash
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=external/gyselalibxx/toolchains/<MACHINE>/toolchain.cmake
+cmake -S . -B build \
+  -DCMAKE_TOOLCHAIN_FILE=external/gyselalibxx/toolchains/<MACHINE>/toolchain.cmake \
+  -DBUILD_IO_APP=OFF \
+  -DBUILD_COMPRESSION_APP=ON
 cmake --build build -j 4
 ```
-if you want to use Python insitu-diagnostics set additionally the `PYTHONPATH`:
+If you want to use Python insitu-diagnostics set additionally the `PYTHONPATH`:
 
 ```bash
 export PYTHONPATH=/path/to/your/repo/gysela-mini-app_io/python:$PYTHONPATH
@@ -34,36 +44,5 @@ export PYTHONPATH=/path/to/your/repo/gysela-mini-app_io/python:$PYTHONPATH
 
 ## Running
 
-```bash
-mpirun -n <nprocs> ./build/apps/gys_io <config.yaml> <pdi_config.yaml>
-```
+Each app has its own usage instructions. See the README file in the corresponding app folder for details.
 
-### Example
-
-```bash
-mpirun -n 4 ./build/apps/gys_io apps/gys_io.yaml apps/pdi_default.yaml
-```
-Note that `nprocs>1` works currently only with the version `"mpi_transpose"` switched on in the `apps/gys_io.yaml` yaml file. 
-
-## Configuration
-
-Edit `apps/gys_io.yaml` to configure:
-
-- **Mesh**: Grid sizes and ranges for toroidal coordinates (Tor1, Tor2, Tor3) and velocity space (Vpar, Mu)
-- **Species**: Number of species, charges, masses
-- **Application version**: `"mpi_transpose"` or `"in-situ-diagnostic"`
-
-## Output Files
-
-- **`fdistribu_5D_output.h5`**: Distribution function and mesh coordinates
-- **`cpu_time.h5`**: CPU timing statistics (initialisation, transpose, GPU↔CPU transfer, I/O)
-- **`fluid_moments.h5`**: Fluid moments (density, mean velocity, temperature)
-
-## Overview
-
-This mini application:
-
-- Initialises a 5D particle distribution function (species × toroidal coordinates × velocity space)
-- Writes the distribution function and mesh coordinates to HDF5 files
-- Computes fluid moments (density, mean velocity, temperature) via C++ integration or in-situ Python computation
-- Measures and saves CPU timing statistics

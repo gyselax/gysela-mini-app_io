@@ -206,7 +206,7 @@ def compress_decompress(input_h5, output_h5, compressed_path):
 
     compressor = PCACompressor(
         n_components=PCA_N_COMPONENTS,
-        normalization="none",
+        normalisation="none",
         clip_nonnegative=False,
     )
 
@@ -486,7 +486,7 @@ def main():
         overwrite=args.overwrite,
     )
 
-    print(f"Master directory initialized: {run_dir}")
+    print(f"Master directory initialised: {run_dir}")
 
     run_pdi_yaml = os.path.join(run_dir, "pdi_out.yaml")
     shutil.copy2(SOURCE_PDI_YAML, run_pdi_yaml)

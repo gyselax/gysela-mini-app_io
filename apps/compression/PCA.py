@@ -22,29 +22,29 @@ class PCACompressor:
         columns = vx * vy
     """
 
-    ALLOWED_NORMALIZATIONS = {"none", "zscore", "log", "asinh"}
+    ALLOWED_NORMALISATIONS = {"none", "zscore", "log", "asinh"}
 
     def __init__(
         self,
         n_components=32,
-        normalization="none",
+        normalisation="none",
         alpha=1e-6,
         clip_nonnegative=False,
         random_state=None,
     ):
         self.n_components = int(n_components)
-        self.normalization = normalization.lower()
+        self.normalisation = normalisation.lower()
         self.alpha = float(alpha)
         self.clip_nonnegative = bool(clip_nonnegative)
         self.random_state = random_state
 
-        if self.normalization not in self.ALLOWED_NORMALIZATIONS:
+        if self.normalisation not in self.ALLOWED_NORMALISATIONS:
             raise ValueError(
-                f"Unknown normalization '{self.normalization}'. "
-                f"Expected one of {sorted(self.ALLOWED_NORMALIZATIONS)}."
+                f"Unknown normalisation '{self.normalisation}'. "
+                f"Expected one of {sorted(self.ALLOWED_NORMALISATIONS)}."
             )
 
-        self.scaler = StandardScaler() if self.normalization == "zscore" else None
+        self.scaler = StandardScaler() if self.normalisation == "zscore" else None
         self.model = None
         self.original_shape = None
 
@@ -79,34 +79,34 @@ class PCACompressor:
         return np.asarray(X).reshape(tuple(original_shape))
 
     # -------------------------------------------------------------------------
-    # Normalization
+    # Normalisation
     # -------------------------------------------------------------------------
 
     def _preprocess(self, X, fit):
-        if self.normalization == "none":
+        if self.normalisation == "none":
             return X
 
-        if self.normalization == "log":
+        if self.normalisation == "log":
             return np.log10(np.clip(X, 1e-16, None))
 
-        if self.normalization == "asinh":
+        if self.normalisation == "asinh":
             return np.arcsinh(X / self.alpha)
 
-        if self.normalization == "zscore":
+        if self.normalisation == "zscore":
             if self.scaler is None:
-                raise RuntimeError("Z-score normalization requested without scaler.")
+                raise RuntimeError("Z-score normalisation requested without scaler.")
 
             if fit:
                 return self.scaler.fit_transform(X)
 
             return self.scaler.transform(X)
 
-        raise RuntimeError(f"Unhandled normalization: {self.normalization}")
+        raise RuntimeError(f"Unhandled normalisation: {self.normalisation}")
 
     def _inverse_preprocess(self, X):
         return self.inverse_preprocess(
             X,
-            normalization=self.normalization,
+            normalisation=self.normalisation,
             alpha=self.alpha,
             scaler_mean=None if self.scaler is None else self.scaler.mean_,
             scaler_scale=None if self.scaler is None else self.scaler.scale_,
@@ -115,29 +115,29 @@ class PCACompressor:
     @staticmethod
     def inverse_preprocess(
         X,
-        normalization,
+        normalisation,
         alpha=1e-6,
         scaler_mean=None,
         scaler_scale=None,
     ):
-        normalization = normalization.lower()
+        normalisation = normalisation.lower()
 
-        if normalization == "none":
+        if normalisation == "none":
             return X
 
-        if normalization == "log":
+        if normalisation == "log":
             return 10.0**X
 
-        if normalization == "asinh":
+        if normalisation == "asinh":
             return alpha * np.sinh(X)
 
-        if normalization == "zscore":
+        if normalisation == "zscore":
             if scaler_mean is None or scaler_scale is None:
                 raise RuntimeError("Z-score inverse preprocessing requires scaler_mean and scaler_scale.")
 
             return X * scaler_scale + scaler_mean
 
-        raise RuntimeError(f"Unhandled normalization: {normalization}")
+        raise RuntimeError(f"Unhandled normalisation: {normalisation}")
 
     # -------------------------------------------------------------------------
     # In-memory compression / decompression
@@ -195,7 +195,7 @@ class PCACompressor:
         os.makedirs(os.path.dirname(os.path.abspath(compressed_path)), exist_ok=True)
 
         metadata = {
-            "normalization": self.normalization,
+            "normalisation": self.normalisation,
             "alpha": self.alpha,
             "clip_nonnegative": self.clip_nonnegative,
             "random_state": self.random_state,
@@ -215,7 +215,7 @@ class PCACompressor:
             "metadata_json": np.array(json.dumps(metadata)),
         }
 
-        if self.normalization == "zscore":
+        if self.normalisation == "zscore":
             payload["scaler_mean"] = self.scaler.mean_
             payload["scaler_scale"] = self.scaler.scale_
             payload["scaler_var"] = self.scaler.var_
@@ -252,7 +252,7 @@ class PCACompressor:
 
         metadata = payload["metadata"]
 
-        normalization = metadata.get("normalization", "none")
+        normalisation = metadata.get("normalisation", "none")
         alpha = float(metadata.get("alpha", 1e-6))
         clip_nonnegative = bool(metadata.get("clip_nonnegative", False))
 
@@ -263,7 +263,7 @@ class PCACompressor:
 
         X_approx = cls.inverse_preprocess(
             X_approx_proc,
-            normalization=normalization,
+            normalisation=normalisation,
             alpha=alpha,
             scaler_mean=scaler_mean,
             scaler_scale=scaler_scale,
@@ -401,7 +401,7 @@ class PCACompressor:
             "output_h5": output_h5,
             "compressed_path": compressed_path,
             "n_components": self.n_components,
-            "normalization": self.normalization,
+            "normalisation": self.normalisation,
             "explained_variance_ratio_sum": (
                 float(np.sum(self.model.explained_variance_ratio_)) if self.model is not None else None
             ),

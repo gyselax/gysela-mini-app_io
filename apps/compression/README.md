@@ -130,7 +130,7 @@ At each compression point, `launch_benchmark.py` appends one entry to `compressi
 - relative L2 reconstruction error
 - maximum absolute reconstruction error
 - compression ratio
-- cleanup flags indicating whether restart artifacts were kept
+- cleanup flags indicating whether restart artefacts were kept
 
 This manifest is the source for compression statistics when temporary payloads are deleted.
 
@@ -172,7 +172,7 @@ The analysis figure contains:
 1. total energy
 2. potential energy
 3. total energy variation
-4. normalized momentum variation
+4. normalised momentum variation
 5. relative mass variation
 6. relative errors against the baseline
 
@@ -199,7 +199,7 @@ The default launcher uses:
 
 ```python
 PCA_N_COMPONENTS = 8
-normalization = "none"
+normalisation = "none"
 clip_nonnegative = False
 ```
 

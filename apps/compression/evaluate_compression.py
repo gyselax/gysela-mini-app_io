@@ -140,7 +140,7 @@ def parse_args():
         nargs="?",
         default=None,
         help=(
-            "Path to the compression_run_* directory to analyze. "
+            "Path to the compression_run_* directory to analyse. "
             "If omitted, the latest compression_run_* directory is used."
         ),
     )
@@ -881,7 +881,7 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
     main_axes[2].set_title("Total Energy Variation")
 
     main_axes[3].set_ylabel(r"$|\Delta \mathcal{P}| / \mathcal{M}_0$")
-    main_axes[3].set_title("Normalized Momentum Variation")
+    main_axes[3].set_title("Normalised Momentum Variation")
 
     main_axes[4].set_ylabel(r"$|\Delta \mathcal{M}| / \mathcal{M}_0$")
     main_axes[4].set_title("Relative Mass Variation")
@@ -907,7 +907,7 @@ def main():
         print(exc)
         return
 
-    print(f"Analyzing data from: {latest_run}")
+    print(f"Analysing data from: {latest_run}")
 
     x, y, vx, vy, dt, nbstep_diag = load_mesh_and_time_info(latest_run)
     moments = Landau2X2VMoments(x, y, vx, vy)

@@ -510,11 +510,15 @@ def main():
     print(f"Diagnostic step        : {nbstep_diag}")
     print(f"Final diagnostic index : {file_index_total}")
 
-    dir_baseline = run_baseline(
-        run_dir=run_dir,
-        run_pdi_yaml=run_pdi_yaml,
-        iter_total=iter_total,
-    )
+    if args.overwrite:
+        dir_baseline = os.path.join(run_dir, "branch_baseline")
+        print("\n--- Skipping reference simulation (--overwrite): reusing existing reference data without compression")
+    else:
+        dir_baseline = run_baseline(
+            run_dir=run_dir,
+            run_pdi_yaml=run_pdi_yaml,
+            iter_total=iter_total,
+        )
 
     assert_complete_branch(dir_baseline, file_index_total)
 

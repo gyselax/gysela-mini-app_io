@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """Read and display CPU timing statistics from HDF5 file."""
 
-<<<<<<< HEAD:python/read_timing_stats.py
-=======
 import argparse
->>>>>>> origin/7-add-pyprojecttoml-and-organise-python-folder:python/utils/read_timing_stats.py
 import sys
 import h5py
 

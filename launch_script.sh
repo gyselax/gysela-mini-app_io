@@ -5,7 +5,8 @@ DASK_WORKERS=${2:-1}
 
 SCHEFILE=scheduler.json
 
-cd ~/gysela-mini-app_io
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 rm -f $SCHEFILE
 

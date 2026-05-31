@@ -6,7 +6,7 @@ DASK_WORKERS=${2:-1}
 SCHEFILE=scheduler.json
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR"/..
 
 rm -f $SCHEFILE
 
@@ -18,6 +18,8 @@ while ! [ -f $SCHEFILE ]; do
 	sleep 1
 	echo -n .
 done
+
+export DEISA_DASK_SCHEDULER_ADDRESS=$(jq -r '.["address"]' $SCHEFILE)
 
 echo "Launch workers"
 dask worker \

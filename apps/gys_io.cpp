@@ -668,10 +668,8 @@ int main(int argc, char** argv)
         write_cpu_time_stats(rank, durations, timing_names, timing_names.size());
     }
 
-    ddc::PdiEvent("End");
-
-    PC_tree_destroy(&configs.conf_pdi);
-    PC_tree_destroy(&configs.conf_gyselax);
+    ddc::PdiEvent("End").with("iter_id", n_iterations - 1); 
+    
     PDI_finalize();
     MPI_Finalize();
 

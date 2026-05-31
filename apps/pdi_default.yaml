@@ -161,18 +161,17 @@ plugins:
           import time
           import xarray as xr
           import numpy as np
+          import logging
           from mpi4py import MPI
           from fluid_moments import FluidMoments
           from deisa.dask import Bridge, get_connection_info
+
+          #logging.basicConfig(level=logging.DEBUG)
 
           comm = MPI.COMM_WORLD
 
           size = comm.Get_size()
           rank = comm.Get_rank()
-
-          with open("scheduler.json", "r") as scheduler_file:
-            dask_addr = json.load(scheduler_file)["address"]
-          print(f"[Pycall-{rank}] Dask address {dask_addr}.")
       InitBridge:
         with: { density_extents: $density_extents, 
                 mean_velocity_extents: $mean_velocity_extents,
@@ -193,45 +192,42 @@ plugins:
           print(f"[Pycall-{rank}] size={size},rank={rank}")
           arrays_metadata = { 
                               'density': {
-                                      'size': (int(density_extents[0]),
-                                               int(density_extents[1]),
-                                               int(density_extents[2]),
-                                               int(density_extents[3])),
-                                      'subsize':  ( int(local_density_extents[0]),
-                                                    int(local_density_extents[1]),
-                                                    int(local_density_extents[2]),
-                                                    int(local_density_extents[3])),
+                                      'global_shape': ( int(density_extents[0]),
+                                                        int(density_extents[1]),
+                                                        int(density_extents[2]),
+                                                        int(density_extents[3])),
+                                      'chunk_shape':  ( int(local_density_extents[0]),
+                                                        int(local_density_extents[1]),
+                                                        int(local_density_extents[2]),
+                                                        int(local_density_extents[3])),
+                                      'chunk_position': ( 0, 0, 0, 0 ),
                               },
                               'velocity': {
-                                      'size': (int(mean_velocity_extents[0]),
-                                               int(mean_velocity_extents[1]),
-                                               int(mean_velocity_extents[2]),
-                                               int(mean_velocity_extents[3])),
-                                      'subsize':  ( int(local_mean_velocity_extents[0]),
-                                                    int(local_mean_velocity_extents[1]),
-                                                    int(local_mean_velocity_extents[2]),
-                                                    int(local_mean_velocity_extents[3])),
+                                      'global_shape': ( int(mean_velocity_extents[0]),
+                                                        int(mean_velocity_extents[1]),
+                                                        int(mean_velocity_extents[2]),
+                                                        int(mean_velocity_extents[3])),
+                                      'chunk_shape':  ( int(local_mean_velocity_extents[0]),
+                                                        int(local_mean_velocity_extents[1]),
+                                                        int(local_mean_velocity_extents[2]),
+                                                        int(local_mean_velocity_extents[3])),
+                                      'chunk_position': ( 0, 0, 0, 0 ),
                               },
                               'temperature': {
-                                      'size': (int(temperature_extents[0]),
-                                               int(temperature_extents[1]),
-                                               int(temperature_extents[2]),
-                                               int(temperature_extents[3])),
-                                      'subsize':  ( int(local_temperature_extents[0]),
-                                                    int(local_temperature_extents[1]),
-                                                    int(local_temperature_extents[2]),
-                                                    int(local_temperature_extents[3])),
+                                      'global_shape': ( int(temperature_extents[0]),
+                                                        int(temperature_extents[1]),
+                                                        int(temperature_extents[2]),
+                                                        int(temperature_extents[3])),
+                                      'chunk_shape':  ( int(local_temperature_extents[0]),
+                                                        int(local_temperature_extents[1]),
+                                                        int(local_temperature_extents[2]),
+                                                        int(local_temperature_extents[3])),
+                                      'chunk_position': ( 0, 0, 0, 0 ),
                               },
           }
 
-          system_metadata = { 'connection': get_connection_info(dask_addr),
-                              'nb_bridges': size
-                            }
-
-          print(f"[Pycall-{rank}] Start bridge connection to{dask_addr}")
-          bridge = Bridge(id=rank,
-                          arrays_metadata=arrays_metadata,
-                          system_metadata=system_metadata)
+          print(f"[Pycall-{rank}] Start bridge connection")
+          bridge = Bridge(comm, arrays_metadata)
           print(f"[Pycall-{rank}] Bridge connected")
 
       FluidMoments:
@@ -271,12 +267,9 @@ plugins:
           print(f"[Pycall-{rank}] Sum local velocity {velocity.sum().data} .")
           print(f"[Pycall-{rank}] Sum local temperature {temperature.sum().data} .")
       End:
-        with: {}
+        with: {iter_id: $iter_id}
         exec: |
-          if rank == 0:
-            while not bridge.get("analytics_over"):
-              time.sleep(2)
-          comm.Barrier()
+          bridge.close(iter_id)
   decl_hdf5:
     #-- Read file names and expose them to PDI
     - file: '${gysela_io_filename}'

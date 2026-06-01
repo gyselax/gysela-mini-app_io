@@ -8,7 +8,7 @@ from datetime import datetime
 
 import yaml
 
-from PCA import PCACompressor
+from compression_methods.PCA import PCACompressor
 
 PCA_N_COMPONENTS = 4
 

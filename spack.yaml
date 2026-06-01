@@ -43,7 +43,7 @@ spack:
     - [$python-packages]
   repos:
     patches:
-      git: https://github.com/ilucasr1/spack.git
+      git: https://github.com/gyselax/spack.git
       branch: releases/v2025.11
     builtin:
       branch: releases/v2025.11

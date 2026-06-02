@@ -7,7 +7,7 @@ import yaml
 import time
 import logging
 import dask.array as da
-from deisa.dask import Deisa
+from deisa.ray.window_handler import Deisa
 from distributed import Variable, Queue, get_client
 
 logging.basicConfig(level=logging.DEBUG)
@@ -16,10 +16,7 @@ gys_io_config = sys.argv[1]
 with open(gys_io_config, 'r') as config_file:
     nb_iter = yaml.safe_load(config_file)["Application"]["n_iterations"]
 
-with open("scheduler.json", 'r') as scheduler_file:
-    dask_addr = json.load(scheduler_file)["address"]
-
-print(f"[Deisa] Start connection of Deisa to {dask_addr}\n")
+print(f"[Deisa] Start connection of Deisa \n")
 deisa = Deisa()
 print("[Deisa] Connected\n")
 

@@ -753,7 +753,7 @@ def plot_combined_errors_vs_baseline(ax, branches):
     eps_plot = 1e-16
 
     quantity_styles = {
-        "E_tot": {"label": r"$E_{tot}$", "marker": None},
+        "E_tot": {"label": r"$\mathcal{E}_{tot}$", "marker": None},
         "E_pot": {"label": r"$E_{pot}$", "marker": None},
         "M": {"label": r"$M$", "marker": None},
         "P": {"label": r"$P$", "marker": None},

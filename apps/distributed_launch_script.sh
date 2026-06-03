@@ -45,7 +45,7 @@ oarsh ${WORKER_NODES} ". ~/env-miniapp-gysela.sh && \
   ray start --head --port=$PORT --block" &
 echo "Head node started"
 
- sleep 10
+sleep 10
 oarsh ${WORKER_NODES} ". ~/env-miniapp-gysela.sh && \
   source ~/venv/bin/activate && \
 
@@ -60,7 +60,7 @@ for NODE in "${MPI_NODES[@]}"; do
       source ~/venv/bin/activate && \
       ray start --address ${HEAD_ADDRESS} --block" &
 done
-sleep 5
+sleep 10
 
 echo "Launch simulation"
 mpirun -machinefile $MPI_NODEFILE \

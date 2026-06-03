@@ -24,7 +24,7 @@ types:
     subtype: double
     size: &mu_size [ '$mu_extents[0]' ]
 
-logging: off
+logging: off #trace 
 
 metadata:
   iter_id: int
@@ -174,14 +174,19 @@ plugins:
 
           size = comm.Get_size()
           rank = comm.Get_rank()
-          coords = comm.Get_coords(rank)
+
+          print(f"{size=}, {rank=}.", flush=True)
+          #coords = tuple(comm.Get_coords(rank))
       InitBridge:
         with: { density_extents: $density_extents, 
                 mean_velocity_extents: $mean_velocity_extents,
                 temperature_extents: $temperature_extents,
                 local_density_extents: $local_density_extents, 
                 local_mean_velocity_extents: $local_mean_velocity_extents,
-                local_temperature_extents: $local_temperature_extents
+                local_temperature_extents: $local_temperature_extents,
+                local_density_starts: $local_density_starts, 
+                local_mean_velocity_starts: $local_mean_velocity_starts,
+                local_temperature_starts: $local_temperature_starts
               }
         exec: |
           print(f"[Pycall-{rank}] density extents {density_extents}.")
@@ -191,6 +196,10 @@ plugins:
           print(f"[Pycall-{rank}] local density extents {local_density_extents}.")
           print(f"[Pycall-{rank}] local velocity extents {local_mean_velocity_extents}.")
           print(f"[Pycall-{rank}] local temperature extents {local_temperature_extents}.")
+
+          print(f"[Pycall-{rank}] local density starts {local_density_starts}.")
+          print(f"[Pycall-{rank}] local velocity starts {local_mean_velocity_starts}.")
+          print(f"[Pycall-{rank}] local temperature starts {local_temperature_starts}.")
 
           print(f"[Pycall-{rank}] size={size},rank={rank}")
           arrays_metadata = { 
@@ -203,7 +212,7 @@ plugins:
                                                         int(local_density_extents[1]),
                                                         int(local_density_extents[2]),
                                                         int(local_density_extents[3])),
-                                      'chunk_position': coords,
+                                      'chunk_position': tuple((local_density_starts // local_density_extents).astype(int).tolist()),
                               },
                               'velocity': {
                                       'global_shape': ( int(mean_velocity_extents[0]),
@@ -214,7 +223,7 @@ plugins:
                                                         int(local_mean_velocity_extents[1]),
                                                         int(local_mean_velocity_extents[2]),
                                                         int(local_mean_velocity_extents[3])),
-                                      'chunk_position': coords,
+                                      'chunk_position': tuple((local_mean_velocity_starts // local_mean_velocity_extents).astype(int).tolist()),
                               },
                               'temperature': {
                                       'global_shape': ( int(temperature_extents[0]),
@@ -225,13 +234,12 @@ plugins:
                                                         int(local_temperature_extents[1]),
                                                         int(local_temperature_extents[2]),
                                                         int(local_temperature_extents[3])),
-                                      'chunk_position': coords,
+                                      'chunk_position': tuple((local_temperature_starts // local_temperature_extents).astype(int).tolist()),
                               },
           }
-
-          print(f"[Pycall-{rank}] Start bridge connection")
+          print(f"[Pycall-{rank}] Start bridge connection", flush=True)
           bridge = Bridge(comm, arrays_metadata)
-          print(f"[Pycall-{rank}] Bridge connected")
+          print(f"[Pycall-{rank}] Bridge connected", flush=True)
 
       FluidMoments:
         with: {iter_id: $iter_id, local_fdistribu_raw: $local_fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
@@ -272,7 +280,7 @@ plugins:
       End:
         with: {iter_id: $iter_id}
         exec: |
-          bridge.close(iter_id)
+          bridge.close(int(iter_id))
   decl_hdf5:
     #-- Read file names and expose them to PDI
     - file: '${gysela_io_filename}'

@@ -535,6 +535,10 @@ int main(int argc, char** argv)
         // Expose index range for parallel I/O
         PDI_expose_idx_range(local_mesh, "local_fdistribu");
         PDI_expose_idx_range(global_mesh, "fdistribu");
+
+        PDI_expose_idx_range(local_mesh, "local_density");
+        PDI_expose_idx_range(local_mesh, "local_mean_velocity");
+        PDI_expose_idx_range(local_mesh, "local_temperature");
         IdxRangeSp const idx_range_sp(global_mesh);
         IdxRange<GridTor1> const idx_range_tor1(global_mesh);
         IdxRange<GridTor2> const idx_range_tor2(global_mesh);
@@ -550,20 +554,20 @@ int main(int argc, char** argv)
         PDI_expose("mean_velocity_extents", moments_extents_arr.data(), PDI_OUT);
         PDI_expose("temperature_extents", moments_extents_arr.data(), PDI_OUT);
 
-        IdxRangeSp const idx_range_sp_local(local_mesh);
-        IdxRange<GridTor1> const idx_range_tor1_local(local_mesh);
-        IdxRange<GridTor2> const idx_range_tor2_local(local_mesh);
-        IdxRange<GridTor3> const idx_range_tor3_local(local_mesh);
+//        IdxRangeSp const idx_range_sp_local(local_mesh);
+//        IdxRange<GridTor1> const idx_range_tor1_local(local_mesh);
+//        IdxRange<GridTor2> const idx_range_tor2_local(local_mesh);
+//        IdxRange<GridTor3> const idx_range_tor3_local(local_mesh);
 
         // Expose local extents for fluid moments
-        std::array<std::size_t, 4> moments_extents_arr_local
-          = {idx_range_sp_local.size(),
-             idx_range_tor1_local.size(),
-             idx_range_tor2_local.size(),
-             idx_range_tor3_local.size()};
-        PDI_expose("local_density_extents", moments_extents_arr_local.data(), PDI_OUT);
-        PDI_expose("local_mean_velocity_extents", moments_extents_arr_local.data(), PDI_OUT);
-        PDI_expose("local_temperature_extents", moments_extents_arr_local.data(), PDI_OUT);
+//        std::array<std::size_t, 4> moments_extents_arr_local
+//          = {idx_range_sp_local.size(),
+//             idx_range_tor1_local.size(),
+//             idx_range_tor2_local.size(),
+//             idx_range_tor3_local.size()};
+//	  PDI_expose("local_density_extents", moments_extents_arr_local.data(), PDI_OUT);
+//        PDI_expose("local_mean_velocity_extents", moments_extents_arr_local.data(), PDI_OUT);
+//        PDI_expose("local_temperature_extents", moments_extents_arr_local.data(), PDI_OUT);
         ddc::PdiEvent("InitBridge");
 
         /*

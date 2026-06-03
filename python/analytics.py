@@ -26,10 +26,10 @@ def sum_moments(density, velocity, temperature):
     sum_velocity = velocity[0].sum().compute() 
     sum_temperature = temperature[0].sum().compute() 
 
-    print(f"[Deisa] Iteration {density[0].t}")
-    print(f"[Deisa] sum density {sum_density}\n")
-    print(f"[Deisa] sum velocity {sum_velocity}\n")
-    print(f"[Deisa] sum temperature {sum_temperature}\n")
+    print(f"[Deisa] Iteration {density[0].t}", flush=True)
+    print(f"[Deisa] sum density {sum_density}", flush=True)
+    print(f"[Deisa] sum velocity {sum_velocity}", flush=True)
+    print(f"[Deisa] sum temperature {sum_temperature}", flush=True)
 
     if density[0].t == nb_iter-1:
         with h5py.File("deisa_fluid_moments.h5", 'w') as f:

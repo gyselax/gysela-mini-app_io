@@ -19,6 +19,8 @@ dependencies = [
     "h5netcdf",
     "netcdf4",
     "tqdm",
+    "jax",
+    "optax",
 ]
 
 [project.scripts]

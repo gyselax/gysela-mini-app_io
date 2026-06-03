@@ -4,4 +4,6 @@ matplotlib
 scikit-learn
 PyYAML
 tqdm
+jax
+optax
 

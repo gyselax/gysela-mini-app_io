@@ -24,6 +24,8 @@ types:
     subtype: double
     size: &mu_size [ '$mu_extents[0]' ]
 
+logging: off
+
 metadata:
   iter_id: int
 
@@ -164,7 +166,7 @@ plugins:
           import logging
           from mpi4py import MPI
           from fluid_moments import FluidMoments
-          from deisa.ray.bridge import Bridge
+          from deisa.ray import Bridge
 
           #logging.basicConfig(level=logging.DEBUG)
 

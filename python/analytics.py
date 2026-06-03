@@ -7,7 +7,7 @@ import yaml
 import time
 import logging
 import dask.array as da
-from deisa.ray.window_handler import Deisa
+from deisa.ray import Deisa
 from distributed import Variable, Queue, get_client
 
 logging.basicConfig(level=logging.DEBUG)
@@ -16,9 +16,9 @@ gys_io_config = sys.argv[1]
 with open(gys_io_config, 'r') as config_file:
     nb_iter = yaml.safe_load(config_file)["Application"]["n_iterations"]
 
-print(f"[Deisa] Start connection of Deisa \n")
+print(f"[Deisa] Start connection of Deisa \n", flush=True)
 deisa = Deisa()
-print("[Deisa] Connected\n")
+print("[Deisa] Connected\n", flush=True)
 
 @deisa.register("density", "velocity", "temperature")
 def sum_moments(density, velocity, temperature):

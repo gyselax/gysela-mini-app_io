@@ -36,10 +36,21 @@ cmake -S . -B build \
   -DBUILD_COMPRESSION_APP=ON
 cmake --build build -j 4
 ```
-If you want to use Python insitu-diagnostics set additionally the `PYTHONPATH`:
+
+## Python venv
+
+In order to use the python tools, you'll need to execute the following commands from the repo's root:
+```bash
+python -m venv venv
+source venv/bin/activate
+python -m pip install -e ./
+```
+
+If you want to use Python insitu-diagnostics, the following commands are available from the command line:
 
 ```bash
-export PYTHONPATH=/path/to/your/repo/gysela-mini-app_io/python:$PYTHONPATH
+read-timing-stats
+verify-fluid-moments
 ```
 
 ## Running

@@ -198,17 +198,23 @@ Each spatial/species point is therefore treated as one sample, and the local vel
 The default launcher uses:
 
 ```python
-PCA_N_COMPONENTS = 8
-normalisation = "none"
-clip_nonnegative = False
+from compression_methods.PCA import PCACompressor
+
+COMPRESSOR_CLASS = PCACompressor
+COMPRESSOR_PARAMS = {
+    "n_components": 8,
+    "normalisation": "none",
+    "clip_nonnegative": False,
+}
 ```
 
 
-## Minimal reproducibility checklist
+## How to test your own compression method ?
 
 1. Build `./build/apps/compression/compression_app`.
 2. Check `params.yaml`, especially `Algorithm.nbiter`, `Algorithm.deltat`, `Output.time_diag`, and `CompressionBenchmark.compression_period`.
-3. Set `PCA_N_COMPONENTS` in `launch_benchmark.py` or implement your own compression method.
+3. Implement your compressor in the `python/compression_methods` folder using the `Compressor` blueprint
+4. Add your import, set `COMPRESSOR_PARAMS` in `launch_benchmark.py` in the `Compression params / names` section.
 4. Run `launch_benchmark.py`.
 5. Run `evaluate_compression.py` on the generated run directory.
 6. Inspect `compression_events.yaml` and `compression_analysis.png`.

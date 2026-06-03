@@ -174,6 +174,7 @@ plugins:
 
           size = comm.Get_size()
           rank = comm.Get_rank()
+          coords = comm.Get_coords(rank)
       InitBridge:
         with: { density_extents: $density_extents, 
                 mean_velocity_extents: $mean_velocity_extents,
@@ -202,7 +203,7 @@ plugins:
                                                         int(local_density_extents[1]),
                                                         int(local_density_extents[2]),
                                                         int(local_density_extents[3])),
-                                      'chunk_position': ( 0, 0, 0, 0 ),
+                                      'chunk_position': coords,
                               },
                               'velocity': {
                                       'global_shape': ( int(mean_velocity_extents[0]),
@@ -213,7 +214,7 @@ plugins:
                                                         int(local_mean_velocity_extents[1]),
                                                         int(local_mean_velocity_extents[2]),
                                                         int(local_mean_velocity_extents[3])),
-                                      'chunk_position': ( 0, 0, 0, 0 ),
+                                      'chunk_position': coords,
                               },
                               'temperature': {
                                       'global_shape': ( int(temperature_extents[0]),
@@ -224,7 +225,7 @@ plugins:
                                                         int(local_temperature_extents[1]),
                                                         int(local_temperature_extents[2]),
                                                         int(local_temperature_extents[3])),
-                                      'chunk_position': ( 0, 0, 0, 0 ),
+                                      'chunk_position': coords,
                               },
           }
 

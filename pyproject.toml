@@ -21,11 +21,18 @@ dependencies = [
     "tqdm",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+pythonpath = ["src/python"]
+
 [project.scripts]
 gysela-mini-app = "utils.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "python"}
+package-dir = {"" = "src/python"}
 
 [tool.setuptools.packages.find]
-where = ["python"]
+where = ["src/python"]

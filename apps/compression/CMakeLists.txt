@@ -2,8 +2,8 @@ add_executable(compression_app landau2X2V_compression.cpp)
 
 target_include_directories(compression_app 
     PRIVATE 
-        "${CMAKE_SOURCE_DIR}/external/gyselalibxx/simulations/geometryXYVxVy"
-        "${CMAKE_SOURCE_DIR}/external/gyselalibxx/simulations/geometryXVx"
+        "${CMAKE_SOURCE_DIR}/src/external/gyselalibxx/simulations/geometryXYVxVy"
+        "${CMAKE_SOURCE_DIR}/src/external/gyselalibxx/simulations/geometryXVx"
 )
 
 target_link_libraries(compression_app
@@ -24,7 +24,7 @@ target_link_libraries(compression_app
 )
 
 get_filename_component(PROJECT_ROOT_DIR ${CMAKE_SOURCE_DIR} ABSOLUTE)
-set(PYTHON_MODULE_PATH "${PROJECT_ROOT_DIR}/python")
+set(PYTHON_MODULE_PATH "${PROJECT_ROOT_DIR}/src/python")
 set_target_properties(compression_app PROPERTIES
     ENVIRONMENT "PYTHONPATH=${PYTHON_MODULE_PATH}:$ENV{PYTHONPATH}"
 )

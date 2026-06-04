@@ -37,13 +37,13 @@ if ("${GYSELA_MINI_APP_COMPILE_SOURCE}")
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 
 ## Link to Gyselalibxx++ library
-add_subdirectory(external/gyselalibxx)
+add_subdirectory(src/external/gyselalibxx)
 
 ## Change the C++ flags to the Gyselalibxx++ specific ones
 set(CMAKE_CXX_FLAGS "${GYSELALIBXX_DEFAULT_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
 
-## Build the source library in `src/`
-add_subdirectory(src/)
+## Build the C++ source library in `src/C++/`
+add_subdirectory(src/C++)
 
 ## Build the simulations (applications mains) in `apps/`
 if("${GYSELA_MINI_APP_BUILD_SIMULATIONS}")

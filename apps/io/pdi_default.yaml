@@ -132,6 +132,10 @@ plugins:
       FluidMoments:
         with: {fdistribu_raw: $fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
         exec: |
+          import xarray as xr
+          import numpy as np
+          from fluid_moments import FluidMoments
+
           fdistribu = xr.DataArray(
               fdistribu_raw,
               dims=('species', 'tor1', 'tor2', 'tor3', 'vpar', 'mu')

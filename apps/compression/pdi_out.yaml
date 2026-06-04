@@ -32,6 +32,11 @@ metadata:
     type: array
     subtype: double
     size: [ '$MeshVy_extents[0]' ]
+  MeshXY_extents: { type: array, subtype: int64, size: 3 }
+  MeshXY:
+    type: array
+    subtype: double
+    size: [ '$MeshXY_extents[0]', '$MeshXY_extents[1]', '$MeshXY_extents[2]' ]
   Nkinspecies: int
   fdistribu_charges_extents : { type: array, subtype: int64, size: 1 }
   fdistribu_charges:
@@ -80,6 +85,26 @@ plugins:
           - absolute_time: '(${iter} + ${iter_offset}) * ${deltat}'
     on_finalize:
       - release: [iter_saved, absolute_time]
+  pycall:
+    on_event:
+      Print_MeshXY:
+        with: {mesh: $MeshXY}
+        exec: |
+          import numpy as np
+          print("MESH")
+          print("type(mesh) =", type(mesh))
+          print("mesh.shape =", mesh.shape)
+          print("mesh.dtype =", mesh.dtype)
+          print("mesh[0, 0, :] =", mesh[0, 0, :])
+          print("mesh[0, 1, :] =", mesh[0, 1, :])
+          print("mesh[1, 0, :] =", mesh[1, 0, :])
+          print("mesh[-1, -1, :] =", mesh[-1, -1, :])
+          x2d = mesh[:, :, 0]
+          y2d = mesh[:, :, 1]
+          print("x2d.shape =", x2d.shape)
+          print("y2d.shape =", y2d.shape)
+          print("x values along first axis:", x2d[:, 0])
+          print("y values along second axis:", y2d[0, :])
   decl_hdf5:
     - file: '${fdistribu_filename}'
       communicator: $MPI_COMM_WORLD

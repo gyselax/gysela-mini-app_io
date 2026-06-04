@@ -310,7 +310,32 @@ int main(int argc, char **argv) {
                      ddc::discrete_space<Species>().charges()[idx_range_kinsp]);
   ddc::expose_to_pdi("fdistribu_masses",
                      ddc::discrete_space<Species>().masses()[idx_range_kinsp]);
+  std::array<int64_t, 3> mesh_xy_extents {
+      static_cast<int64_t>(idxrange_x.size()),
+      static_cast<int64_t>(idxrange_y.size()),
+      2
+  };
 
+  std::vector<double> mesh_xy(idxrange_x.size() * idxrange_y.size() * 2);
+
+  for (IdxX ix : idxrange_x) {
+      for (IdxY iy : idxrange_y) {
+          std::size_t const i = ix - idxrange_x.front();
+          std::size_t const j = iy - idxrange_y.front();
+
+          std::size_t const ij = (i * idxrange_y.size() + j) * 2;
+
+          double const x = ddc::coordinate(ix);
+          double const y = ddc::coordinate(iy);
+
+          mesh_xy[ij + 0] = x;
+          mesh_xy[ij + 1] = y;
+      }
+  }
+
+  PDI_expose("MeshXY_extents", mesh_xy_extents.data(), PDI_OUT);
+  PDI_expose("MeshXY", mesh_xy.data(), PDI_OUT);
+  ddc::PdiEvent("Print_MeshXY");
   if (rank == 0 && nb_restart == 0) {
     auto allfequilibrium_host =
         ddc::create_mirror_view_and_copy(get_field(allfequilibrium));

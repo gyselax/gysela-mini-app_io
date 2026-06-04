@@ -37,6 +37,12 @@ cmake -S . -B build \
 cmake --build build -j 4
 ```
 
+For the docker toolchain, you should use the following in the docker container:
+```bash
+cmake -S . -B build
+cmake --build build -j 4
+```
+
 ## Python venv
 
 In order to use the python tools, you'll need to execute the following commands from the repo's root:
@@ -47,7 +53,6 @@ python -m pip install -e ./
 ```
 
 If you want to use Python insitu-diagnostics, the following commands are available from the command line:
-
 ```bash
 read-timing-stats
 verify-fluid-moments

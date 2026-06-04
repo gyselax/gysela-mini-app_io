@@ -933,12 +933,12 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
         ax.set_xlabel("Time (t)")
         ax.legend(loc="upper right", bbox_to_anchor=(1.23, 1.0))
 
-    output_png = os.path.join(latest_run, "compression_analysis.png")
+    output_pdf = os.path.join(latest_run, "compression_analysis.pdf")
 
-    fig.savefig(output_png, dpi=300, bbox_inches="tight")
+    fig.savefig(output_pdf, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Analysis plot written to: {output_png}")
+    print(f"Analysis plot written to: {output_pdf}")
 
 
 def main():

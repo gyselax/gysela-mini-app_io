@@ -53,6 +53,9 @@ metadata:
   local_fdistribu_starts: { type: array, subtype: size_t, size: 5 }
   local_fdistribu_extents: { type: array, subtype: size_t, size: 5 }
 
+  #-- Catalyst
+  cycle: int
+  time: double
 
 data:
   fdistribu:
@@ -64,6 +67,14 @@ data:
     type: array
     subtype: double
     size: [ '$electrostatic_potential_extents[0]', '$electrostatic_potential_extents[1]' ]
+  bidon:
+    type: array
+    subtype: double
+    size: [ '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+  bidon_bis:
+    type: array
+    subtype: double
+    size: [ '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
 
 plugins:
   mpi:
@@ -116,3 +127,57 @@ plugins:
             start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
         electrostatic_potential: ~
   # trace: info
+  pycall:
+    on_event:
+      initial_catalyst:
+        with: {meshx_py: $MeshX, meshy_py: $MeshY, meshvx_py: $MeshVx, meshvy_py: $MeshVy, local_fdistribu_extents_py: $local_fdistribu_extents, local_fdistribu_starts_py: $local_fdistribu_starts}
+        exec: |
+          
+          from python_prep import print_mesh_info
+          print_mesh_info(meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py)
+
+      iteration:
+        with: {fdistribu_py: $fdistribu, electrostatic_potential_py: $electrostatic_potential, iter_py: $iter, meshx_py: $MeshX, meshy_py: $MeshY, meshvx_py: $MeshVx, meshvy_py: $MeshVy, local_fdistribu_extents_py: $local_fdistribu_extents, local_fdistribu_starts_py: $local_fdistribu_starts}
+        exec: |
+          import mpi4py
+          from python_prep import prep4catalyst
+          prep4catalyst(fdistribu_py, electrostatic_potential_py, iter_py, meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py)
+          
+
+  catalyst:
+    scripts:
+      script1: "/Users/yushan/Codes/GitHub/gysela-mini-app/gysela-mini-app_io/apps/catalyst_pipeline_with_rendering.py"
+      # script2: "/Users/yushan/Codes/GitHub/gysela-mini-app/gysela-mini-app_io/apps/catalyst_pipeline.py"
+    on_event: "catalyst_execute"
+    execute:
+      state:
+        timestep: '$cycle'
+        time: '$time'
+        multiblock: 1
+      channels:
+        grid:
+          type: "mesh"
+          data:
+            coordsets:
+              my_coords:
+                type: "rectilinear"
+                values:
+                  x:
+                    PDI_data_array: "local_points_X"
+                    size: '$local_fdistribu_extents[3]'
+                  y:
+                    PDI_data_array: "local_points_Y"
+                    size: '$local_fdistribu_extents[4]'
+            topologies:
+              my_mesh:
+                type: "rectilinear"
+                coordset: "my_coords"
+            fields:
+              fixed_point_fdistribu:
+                association: "vertex"
+                topology: "my_mesh"
+                volume_dependent: "false"
+                values:
+                  PDI_data_array: "bidon"
+                  size: '$local_fdistribu_extents[3]*$local_fdistribu_extents[4]'
+        

@@ -1,16 +1,17 @@
 # GYSELA Compression Mini App
 
-This directory contains a benchmark pipeline for evaluating restart-file compression in the 2D2V Landau damping mini-application.  The workflow compares a reference, uninterrupted simulation against a segmented simulation that periodically compresses and decompresses the distribution function before restarting.
+This directory contains a benchmark pipeline for evaluating restart-file compression in a 2D2V Vlasov--Poisson mini-application. The default benchmark uses Landau damping; a two-stream instability case is also available. The workflow compares a reference, uninterrupted simulation against a segmented simulation that periodically compresses and decompresses the distribution function before restarting.
 
 ## Main files
 
 | File | Role |
 | --- | --- |
-| `landau2X2V_compression.cpp` | C++ mini-app. Runs the 2D2V Vlasov--Poisson Landau damping case, supports cold start and restart, exposes fields and metadata through PDI, and writes `GYSELALIBXX_*.h5` diagnostic/restart files. |
-| `launch_benchmark.py` | Orchestrates the complete benchmark. It creates a run directory, runs the baseline branch, runs the periodically restarted compressed branch, performs PCA compression/decompression at restart points, and writes `compression_events.yaml`. |
+| `gys_compress.cpp` | C++ mini-app. Selects the initial condition via `Input.case` (`landau_damping` or `two_stream`), supports cold start and restart, exposes fields and metadata through PDI, and writes `GYSELALIBXX_*.h5` diagnostic/restart files. |
+| `launch_benchmark.py` | Orchestrates the Landau-damping compression benchmark using `params_landau_damping.yaml` as the base template. It creates a run directory, runs the baseline branch, runs the periodically restarted compressed branch, performs PCA compression/decompression at restart points, and writes `compression_events.yaml`. |
 | `PCA.py` | Implements the PCA compressor for the `fdistribu[species, x, y, vx, vy]` HDF5 dataset. It stores compressed PCA payloads as `.npz` files and reconstructs PDI-compatible HDF5 restart files. |
 | `evaluate_compression.py` | Post-processes a completed run. It computes mass, momentum, kinetic energy, potential energy and relative errors with respect to the baseline, then generates `compression_analysis.png`. |
-| `params.yaml` | Base GYSELA/Gyselalib++ input file. Must contain `Algorithm.nbiter`, `Algorithm.deltat`, `Output.time_diag`, and `CompressionBenchmark.compression_period`. |
+| `params_landau_damping.yaml` | GYSELA/Gyselalib++ input for Landau damping (`Input.case: landau_damping`). Used by `launch_benchmark.py`. Requires `Algorithm.nbiter`, `Algorithm.deltat`, `Output.time_diag`, and `CompressionBenchmark.compression_period`. |
+| `params_two_stream.yaml` | GYSELA/Gyselalib++ input for the two-stream case (`Input.case: two_stream`). Set `SpeciesInfo[].mean_velocity_eq` to the stream speed `v0` and `perturb_amplitude` to `eps` in `1 + eps cos(kx x) cos(ky y)`. |
 | `pdi_out.yaml` | PDI I/O configuration used by the mini-app to read and write HDF5 data. |
 
 ## Pipeline overview
@@ -34,6 +35,14 @@ The baseline branch is run once from the analytic initial condition for the full
 
 The compressed branch is run segment by segment. At the end of each segment, except the final one, the current restart file is compressed with your favourite method and immediately reconstructed into an approximate HDF5 restart. The next segment restarts from that approximation.
 
+## Python environment
+
+Activate the project virtual environment (created by `./installer.sh` at the repo root):
+
+```bash
+source .gys_env/bin/activate
+```
+
 ## Running the benchmark
 
 Simply run:
@@ -56,11 +65,22 @@ python apps/compression/launch_benchmark.py compression_run_pca4
 The launcher executes the compiled application through MPI:
 
 ```bash
-mpirun -n 4 ./build/apps/compression/compression_app <config.yaml> <pdi_out.yaml>
+mpirun -n 4 ./build/apps/compression/gys_compress <config.yaml> <pdi_out.yaml>
 ```
 
 Adjust `EXEC_CMD` in `launch_benchmark.py` if the number of ranks or executable path must be changed.
 
+## Running the mini-app directly
+
+From the repository root (after building):
+
+```bash
+mpirun -n 4 ./build/apps/compression/gys_compress \
+  apps/compression/<PARAMS> \
+  apps/compression/pdi_out.yaml
+```
+
+where `<PARAMS>` is either `params_landau_damping.yaml` or `params_two_stream.yaml`   
 ## Launcher options
 
 ```bash
@@ -96,7 +116,7 @@ Input:
   iter_offset: 0
 ```
 
-For the first segment, `nb_restart = 0`, so the simulation starts from the analytic Maxwellian plus perturbation. For later segments, the launcher writes a temporary YAML file with:
+For the first segment, `nb_restart = 0`, so the simulation starts from the analytic initial condition defined by `Input.case`. For later segments, the launcher writes a temporary YAML file with:
 
 - `nb_restart > 0`
 - `fdistribu_filename` set to the reconstructed approximate restart file
@@ -190,18 +210,24 @@ Each spatial/species point is therefore treated as one sample, and the local vel
 The default launcher uses:
 
 ```python
-PCA_N_COMPONENTS = 8
-normalisation = "none"
-clip_nonnegative = False
+from compression_methods.PCA import PCACompressor
+
+COMPRESSOR_CLASS = PCACompressor
+COMPRESSOR_PARAMS = {
+    "n_components": 8,
+    "normalisation": "none",
+    "clip_nonnegative": False,
+}
 ```
 
 
-## Minimal reproducibility checklist
+## How to test your own compression method ?
 
-1. Build `./build/apps/compression/compression_app`.
-2. Check `params.yaml`, especially `Algorithm.nbiter`, `Algorithm.deltat`, `Output.time_diag`, and `CompressionBenchmark.compression_period`.
-3. Set `PCA_N_COMPONENTS` in `launch_benchmark.py` or implement your own compression method.
-4. Run `launch_benchmark.py`.
-5. Run `evaluate_compression.py` on the generated run directory.
-6. Inspect `compression_events.yaml` and `compression_analysis.png`.
+1. Build `./build/apps/compression/gys_compress`.
+2. Check `params_landau_damping.yaml` (or change `SOURCE_GYSELA_YAML` in `launch_benchmark.py` to use another template), especially `Algorithm.nbiter`, `Algorithm.deltat`, `Output.time_diag`, and `CompressionBenchmark.compression_period`.
+3. Implement your compressor in the `python/compression_methods` folder using the `Compressor` blueprint.
+4. Add your import and set `COMPRESSOR_PARAMS` in `launch_benchmark.py` in the `Compression params / names` section.
+5. Run `launch_benchmark.py`.
+6. Run `evaluate_compression.py` on the generated run directory.
+7. Inspect `compression_events.yaml` and `compression_analysis.png`.
 

@@ -7,8 +7,10 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
+from Compressor import Compressor
 
-class PCACompressor:
+
+class PCACompressor(Compressor):
     """
     PCA compressor for GYSELALIBXX fdistribu restart fields.
 
@@ -37,6 +39,15 @@ class PCACompressor:
         self.alpha = float(alpha)
         self.clip_nonnegative = bool(clip_nonnegative)
         self.random_state = random_state
+
+        super().__init__(
+            method_name="PCA",
+            n_components=self.n_components,
+            normalisation=self.normalisation,
+            alpha=self.alpha,
+            clip_nonnegative=self.clip_nonnegative,
+            random_state=self.random_state,
+        )
 
         if self.normalisation not in self.ALLOWED_NORMALISATIONS:
             raise ValueError(
@@ -274,6 +285,13 @@ class PCACompressor:
 
         return cls.matrix_to_array(X_approx, original_shape)
 
+    def get_extra_metrics(self):
+        return {
+            "explained_variance_ratio_sum": (
+                float(np.sum(self.model.explained_variance_ratio_)) if self.model is not None else None
+            ),
+        }
+
     # -------------------------------------------------------------------------
     # HDF5 restart-file workflow
     # -------------------------------------------------------------------------
@@ -374,41 +392,10 @@ class PCACompressor:
         output_h5=None,
         compressed_path=None,
     ):
-        diff = f_original - f_reconstructed
-
-        original_norm = np.linalg.norm(f_original.ravel())
-
-        relative_l2_error = np.linalg.norm(diff.ravel()) / original_norm if original_norm > 0.0 else np.nan
-
-        max_abs_error = np.max(np.abs(diff))
-
-        original_size = os.path.getsize(input_h5) if input_h5 is not None else None
-        reconstructed_size = os.path.getsize(output_h5) if output_h5 is not None else None
-        compressed_size = (
-            os.path.getsize(compressed_path)
-            if compressed_path is not None and os.path.exists(compressed_path)
-            else None
+        return super().compute_metrics(
+            f_original=f_original,
+            f_reconstructed=f_reconstructed,
+            input_h5=input_h5,
+            output_h5=output_h5,
+            compressed_path=compressed_path,
         )
-
-        compression_ratio = (
-            original_size / compressed_size
-            if original_size is not None and compressed_size is not None and compressed_size > 0
-            else None
-        )
-
-        return {
-            "input_h5": input_h5,
-            "output_h5": output_h5,
-            "compressed_path": compressed_path,
-            "n_components": self.n_components,
-            "normalisation": self.normalisation,
-            "explained_variance_ratio_sum": (
-                float(np.sum(self.model.explained_variance_ratio_)) if self.model is not None else None
-            ),
-            "relative_l2_error": float(relative_l2_error),
-            "max_abs_error": float(max_abs_error),
-            "original_size": original_size,
-            "reconstructed_size": reconstructed_size,
-            "compressed_size": compressed_size,
-            "compression_ratio": compression_ratio,
-        }

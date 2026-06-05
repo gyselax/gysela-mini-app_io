@@ -8,16 +8,24 @@ from datetime import datetime
 
 import yaml
 
-from PCA import PCACompressor
+# ------------------------------------------------------------------
+# Compression params / names
+# ------------------------------------------------------------------
+from compression_methods.PCA import PCACompressor
 
-PCA_N_COMPONENTS = 4
+COMPRESSOR_CLASS = PCACompressor
+COMPRESSOR_PARAMS = {
+    "n_components": 8,
+    "normalisation": "none",
+    "clip_nonnegative": False,
+}
 
-EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/compression_app"]
+EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/gys_compress"]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
-SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params.yaml")
+SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out.yaml")
 
 
@@ -128,7 +136,8 @@ def read_benchmark_config(config):
         compression_period = int(config["CompressionBenchmark"]["compression_period"])
     except KeyError as exc:
         raise RuntimeError(
-            "Missing required benchmark parameter in params.yaml. "
+            "Missing required benchmark parameter in the GYSELA input template "
+            f"({os.path.basename(SOURCE_GYSELA_YAML)}). "
             "Expected Algorithm.nbiter and CompressionBenchmark.compression_period."
         ) from exc
 
@@ -200,15 +209,28 @@ def assert_complete_branch(branch_dir, file_index_total):
         )
 
 
-def compress_decompress(input_h5, output_h5, compressed_path):
-    print(f"  [PCA Compression] " f"{os.path.basename(input_h5)} -> {os.path.basename(output_h5)}")
-    print(f"  [Compressed Payload] {os.path.basename(compressed_path)}")
+def build_compressor():
+    return COMPRESSOR_CLASS(**COMPRESSOR_PARAMS)
 
-    compressor = PCACompressor(
-        n_components=PCA_N_COMPONENTS,
-        normalisation="none",
-        clip_nonnegative=False,
+
+def format_param_summary(metrics):
+    params = metrics.get("params") or {}
+
+    if not params:
+        return "no parameters"
+
+    return ", ".join(f"{key}={value}" for key, value in params.items())
+
+
+def compress_decompress(input_h5, output_h5, compressed_path):
+    compressor = build_compressor()
+
+    print(
+        f"  [{compressor.method_name} Compression] "
+        f"{os.path.basename(input_h5)} -> {os.path.basename(output_h5)}"
     )
+    print(f"  [Parameters] {compressor.printable_name()}")
+    print(f"  [Compressed Payload] {os.path.basename(compressed_path)}")
 
     metrics = compressor.compress_decompress_h5(
         input_h5=input_h5,
@@ -216,9 +238,20 @@ def compress_decompress(input_h5, output_h5, compressed_path):
         compressed_path=compressed_path,
     )
 
-    print("  PCA explained variance ratio sum = " f"{metrics['explained_variance_ratio_sum']:.12e}")
-    print("  PCA relative L2 reconstruction error = " f"{metrics['relative_l2_error']:.12e}")
-    print("  PCA max abs reconstruction error = " f"{metrics['max_abs_error']:.12e}")
+    print(f"  Method = {metrics['method_name']} ({format_param_summary(metrics)})")
+
+    explained = metrics.get("explained_variance_ratio_sum")
+    if explained is not None:
+        print(f"  Explained variance ratio sum = {explained:.12e}")
+
+    print("  Relative L2 reconstruction error = " f"{metrics['relative_l2_error']:.12e}")
+    print("  Max abs reconstruction error = " f"{metrics['max_abs_error']:.12e}")
+
+    if metrics.get("mean_abs_error") is not None:
+        print("  Mean abs reconstruction error = " f"{metrics['mean_abs_error']:.12e}")
+
+    if metrics.get("rmse") is not None:
+        print("  RMSE reconstruction error = " f"{metrics['rmse']:.12e}")
 
     if metrics["compression_ratio"] is not None:
         print(f"  Compression ratio = {metrics['compression_ratio']:.6f}x")
@@ -446,13 +479,21 @@ def run_periodic_compressed_branch(
                 "branch_restart": os.path.relpath(raw_restart, run_dir),
                 "approx_restart": os.path.relpath(approx_restart, run_dir),
                 "compressed_payload": (os.path.relpath(compressed_payload, run_dir) if keep_payloads else None),
-                "n_components": PCA_N_COMPONENTS,
+                "method_name": metrics.get("method_name"),
+                "param_names": metrics.get("param_names", []),
+                "params": metrics.get("params", {}),
+                # Backward-compatible convenience key for PCA runs.
+                "n_components": metrics.get("param_n_components"),
                 "raw_restart_size": raw_restart_size,
                 "approx_restart_size": approx_restart_size,
                 "compressed_payload_size": compressed_payload_size,
-                "explained_variance_ratio_sum": float(metrics["explained_variance_ratio_sum"]),
+                "explained_variance_ratio_sum": metrics.get("explained_variance_ratio_sum"),
                 "relative_l2_error": float(metrics["relative_l2_error"]),
                 "max_abs_error": float(metrics["max_abs_error"]),
+                "mean_abs_error": float(metrics["mean_abs_error"]),
+                "rmse": float(metrics["rmse"]),
+                "compression_seconds": metrics.get("compression_seconds"),
+                "decompression_seconds": metrics.get("decompression_seconds"),
                 "compression_ratio": (
                     None if metrics["compression_ratio"] is None else float(metrics["compression_ratio"])
                 ),

@@ -1,12 +1,12 @@
-add_executable(compression_app landau2X2V_compression.cpp)
+add_executable(gys_compress gys_compress.cpp)
 
-target_include_directories(compression_app 
-    PRIVATE 
+target_include_directories(gys_compress
+    PRIVATE
         "${CMAKE_SOURCE_DIR}/src/external/gyselalibxx/simulations/geometryXYVxVy"
         "${CMAKE_SOURCE_DIR}/src/external/gyselalibxx/simulations/geometryXVx"
 )
 
-target_link_libraries(compression_app
+target_link_libraries(gys_compress
     PUBLIC
         mini_app_io_lib
         DDC::core
@@ -25,8 +25,8 @@ target_link_libraries(compression_app
 
 get_filename_component(PROJECT_ROOT_DIR ${CMAKE_SOURCE_DIR} ABSOLUTE)
 set(PYTHON_MODULE_PATH "${PROJECT_ROOT_DIR}/src/python")
-set_target_properties(compression_app PROPERTIES
+set_target_properties(gys_compress PROPERTIES
     ENVIRONMENT "PYTHONPATH=${PYTHON_MODULE_PATH}:$ENV{PYTHONPATH}"
 )
 
-install(TARGETS compression_app)
+install(TARGETS gys_compress)

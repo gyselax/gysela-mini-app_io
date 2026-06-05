@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <string>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -19,6 +21,7 @@
 #include "bsl_advection_x.hpp"
 #include "chargedensitycalculator.hpp"
 #include "ddc_alias_inline_functions.hpp"
+#include "ddc_helper.hpp"
 #include "fft_poisson_solver.hpp"
 #include "geometry_xyvxvy.hpp"
 #include "input.hpp"
@@ -82,6 +85,126 @@ ConfigHandles parse_config_files(int argc, char **argv) {
   PC_errhandler(PC_NULL_HANDLER);
   return configs;
 }
+
+void init_landau_damping(
+    IdxRangeSp const idx_range_kinsp,
+    PC_tree_t const& conf_gyselax,
+    DFieldMemSpXYVxVy& allfdistribu_x2D_split,
+    DFieldMemSpVxVy& allfequilibrium) {
+  MaxwellianEquilibrium const init_fequilibrium =
+      MaxwellianEquilibrium::init_from_input(idx_range_kinsp, conf_gyselax);
+  init_fequilibrium(get_field(allfequilibrium));
+
+  SingleModePerturbInitialisation const init =
+      SingleModePerturbInitialisation::init_from_input(
+          get_const_field(allfequilibrium), idx_range_kinsp, conf_gyselax);
+  init(get_field(allfdistribu_x2D_split));
+}
+
+void init_two_stream(
+    IdxRangeSp const idx_range_kinsp,
+    PC_tree_t const& conf_gyselax,
+    DFieldMemSpXYVxVy& allfdistribu_x2D_split,
+    DFieldMemSpVxVy& allfequilibrium) {
+  IdxRangeXYVxVy const gridxyvxvy =
+      get_idx_range<GridX, GridY, GridVx, GridVy>(allfdistribu_x2D_split);
+  IdxRangeXY const gridxy = get_idx_range<GridX, GridY>(allfdistribu_x2D_split);
+  IdxRangeVxVy const gridvxvy = get_idx_range<GridVx, GridVy>(allfdistribu_x2D_split);
+
+  DFieldSpXYVxVy allfdistribu = get_field(allfdistribu_x2D_split);
+  DFieldSpVxVy allfequilibrium_field = get_field(allfequilibrium);
+
+  DFieldMemXY perturbation_alloc(gridxy);
+  DFieldXY perturbation = get_field(perturbation_alloc);
+
+  double const inv_2pi = 1. / (2. * M_PI);
+  double const length_x =
+      ddcHelper::total_interval_length(ddc::select<GridX>(gridxy));
+  double const length_y =
+      ddcHelper::total_interval_length(ddc::select<GridY>(gridxy));
+
+  ddc::host_for_each(idx_range_kinsp, [&](IdxSp const isp) {
+    PC_tree_t const conf_isp = PCpp_get(conf_gyselax, ".SpeciesInfo[%d]", isp.uid());
+
+    double const v0 = PCpp_double(conf_isp, ".mean_velocity_eq");
+    double const eps = PCpp_double(conf_isp, ".perturb_amplitude");
+    int const perturb_mode =
+        static_cast<int>(PCpp_int(conf_isp, ".perturb_mode"));
+    double const kx = perturb_mode * 2. * M_PI / length_x;
+    double const ky = perturb_mode * 2. * M_PI / length_y;
+
+    ddc::parallel_for_each(
+        Kokkos::DefaultExecutionSpace(),
+        gridvxvy,
+        KOKKOS_LAMBDA(IdxVxVy const ivxvy) {
+          double const vx = ddc::coordinate(ddc::select<GridVx>(ivxvy));
+          double const vy = ddc::coordinate(ddc::select<GridVy>(ivxvy));
+          double const m1 = Kokkos::exp(
+              -((vx - v0) * (vx - v0) + (vy - v0) * (vy - v0)) / 2.);
+          double const m2 = Kokkos::exp(
+              -((vx + v0) * (vx + v0) + (vy + v0) * (vy + v0)) / 2.);
+          allfequilibrium_field(isp, ivxvy) = 0.5 * inv_2pi * (m1 + m2);
+        });
+
+    ddc::parallel_for_each(
+        Kokkos::DefaultExecutionSpace(),
+        gridxy,
+        KOKKOS_LAMBDA(IdxXY const ixy) {
+          IdxX const ix = ddc::select<GridX>(ixy);
+          IdxY const iy = ddc::select<GridY>(ixy);
+          double const x = ddc::coordinate(ix);
+          double const y = ddc::coordinate(iy);
+          perturbation(ix, iy) =
+              1. + eps * Kokkos::cos(kx * x) * Kokkos::cos(ky * y);
+        });
+
+    ddc::parallel_for_each(
+        Kokkos::DefaultExecutionSpace(),
+        gridxyvxvy,
+        KOKKOS_LAMBDA(IdxXYVxVy const ixyvxvy) {
+          IdxX const ix = ddc::select<GridX>(ixyvxvy);
+          IdxY const iy = ddc::select<GridY>(ixyvxvy);
+          IdxVx const ivx = ddc::select<GridVx>(ixyvxvy);
+          IdxVy const ivy = ddc::select<GridVy>(ixyvxvy);
+
+          double fdistribu_val =
+              perturbation(ix, iy) * allfequilibrium_field(isp, ivx, ivy);
+          if (fdistribu_val < 1.e-60) {
+            fdistribu_val = 1.e-60;
+          }
+          allfdistribu(isp, ix, iy, ivx, ivy) = fdistribu_val;
+        });
+  });
+}
+
+void init_case(
+    IdxRangeSp const idx_range_kinsp,
+    ConfigHandles const& configs,
+    MPITransposeAllToAll<X2DSplit, V2DSplit>& transpose,
+    DFieldMemSpVxVy& allfequilibrium,
+    DFieldMemSpXYVxVy& allfdistribu_x2D_split,
+    DFieldMemSpVxVyXY& allfdistribu_v2D_split) {
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    std::string const case_name =
+    PC_status(PC_get(configs.conf_gyselax, ".Input.case"))? "landau_damping": PCpp_string(configs.conf_gyselax, ".Input.case");
+    if (rank == 0) {  
+        cout << "case: " << case_name << endl;
+      }
+  if (case_name == "landau_damping") {
+    init_landau_damping(idx_range_kinsp, configs.conf_gyselax,
+                        allfdistribu_x2D_split, allfequilibrium);
+  } else if (case_name == "two_stream") {
+    init_two_stream(idx_range_kinsp, configs.conf_gyselax, allfdistribu_x2D_split,
+                    allfequilibrium);
+  } else {
+    assert(false && "Unknown case");
+  }
+
+  transpose(Kokkos::DefaultExecutionSpace(), get_field(allfdistribu_v2D_split),
+            get_const_field(allfdistribu_x2D_split));
+}
+
 } // namespace
 
 void print_banner(int rank) {
@@ -189,20 +312,8 @@ int main(int argc, char **argv) {
   PDI_expose_idx_range(idxrange_spxyvxvy_v2Dsplit, "local_fdistribu");
 
   if (nb_restart == 0) {
-    MaxwellianEquilibrium const init_fequilibrium =
-        MaxwellianEquilibrium::init_from_input(idx_range_kinsp,
-                                               configs.conf_gyselax);
-    init_fequilibrium(get_field(allfequilibrium));
-
-    SingleModePerturbInitialisation const init =
-        SingleModePerturbInitialisation::init_from_input(
-            get_const_field(allfequilibrium), idx_range_kinsp,
-            configs.conf_gyselax);
-    init(get_field(allfdistribu_x2D_split));
-
-    transpose(Kokkos::DefaultExecutionSpace(),
-              get_field(allfdistribu_v2D_split),
-              get_const_field(allfdistribu_x2D_split));
+    init_case(idx_range_kinsp, configs, transpose, allfequilibrium,
+              allfdistribu_x2D_split, allfdistribu_v2D_split);
   } else {
     DFieldMemSpXYVxVy allfdistribu_restart_output_layout(
         idxrange_spxyvxvy_v2Dsplit);

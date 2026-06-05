@@ -14,7 +14,7 @@ MACHINE="${1:-${GYSELA_MACHINE:-}}"
 if [[ -z "${MACHINE}" ]]; then
   host="$(hostname -s 2>/dev/null || hostname)"
   case "${host}" in
-    persee*) MACHINE="persee/xeon" ;;
+    persee*) MACHINE="persee/v100" ;;
   esac
 fi
 
@@ -40,18 +40,34 @@ for f in "${ENV_SH}" "${TOOLCHAIN_CMAKE}"; do
   fi
 done
 
-echo "==> Toolchain: ${MACHINE}"
-echo "==> Sourcing ${ENV_SH}"
-# shellcheck source=/dev/null
+echo ""
+echo "================================================"
+echo "Sourcing toolchain: ${MACHINE}"
+echo "================================================"
 source "${ENV_SH}"
 
-export PYTHONPATH="${REPO_ROOT}/src/python${PYTHONPATH:+:${PYTHONPATH}}"
 
-echo "==> pip install -e .[dev]"
-python -m venv venv
-source ./venv/bin/activate
+echo ""
+echo "================================================"
+echo "Install python dependencies"
+echo "================================================"
+
+VENV_DIR="${REPO_ROOT}/.gys_env"
+if [[ -f "${VENV_DIR}/bin/activate" ]]; then
+  echo "==> Using existing .gys_env"
+else
+  echo "==> Creating .gys_env"
+  python -m venv "${VENV_DIR}"
+fi
+# shellcheck source=/dev/null
+source "${VENV_DIR}/bin/activate"
 python -m pip install -e ".[dev]"
 
+
+echo ""
+echo "================================================"
+echo "CMake"
+echo "================================================"
 BUILD_DIR="${REPO_ROOT}/build"
 JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
@@ -62,7 +78,11 @@ cmake -S . -B "${BUILD_DIR}" \
 echo "==> CMake build (-j ${JOBS})"
 cmake --build "${BUILD_DIR}" -j "${JOBS}"
 
-echo "==> pytest"
+echo ""
+echo "================================================"
+echo "Run tests"
+echo "================================================"
+source "${ENV_SH}"
 pytest
 
 echo "==> Done"

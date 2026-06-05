@@ -459,7 +459,19 @@ int main(int argc, char **argv) {
    *   Main program: mini_app            *
    *
    ****************************************/
+
+  
+  #ifdef SUBFILING
+  int provided;
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+  if (provided != MPI_THREAD_MULTIPLE){
+    printf("provided level = %d, required level = %d\n", provided, MPI_THREAD_MULTIPLE);
+    return EXIT_FAILURE;
+  }
+  #else
   MPI_Init(&argc, &argv);
+  #endif
+  
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   Kokkos::ScopeGuard scope(argc, argv);

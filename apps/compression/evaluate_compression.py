@@ -304,8 +304,6 @@ def process_branch(
     if max_workers is None:
         max_workers = min(4, os.cpu_count() or 1)
 
-    print(f"Processing {os.path.basename(branch_dir)} with " f"{len(files)} files using {max_workers} workers")
-
     worker_args = [
         (
             filepath,
@@ -494,6 +492,16 @@ def compute_compression_stats(latest_run, compression_events):
         "max_abs_error",
     )
 
+    worst_mean_abs_event = find_event_with_max_metric(
+        compression_events,
+        "mean_abs_error",
+    )
+
+    worst_rmse_event = find_event_with_max_metric(
+        compression_events,
+        "rmse",
+    )
+
     worst_ratio_event = find_event_with_max_metric(
         compression_events,
         "compression_ratio",
@@ -529,9 +537,14 @@ def compute_compression_stats(latest_run, compression_events):
 
     worst_l2_error = None if worst_l2_event is None else event_value(worst_l2_event, "relative_l2_error")
     worst_max_abs_error = None if worst_max_abs_event is None else event_value(worst_max_abs_event, "max_abs_error")
+    worst_mean_abs_error = None if worst_mean_abs_event is None else event_value(worst_mean_abs_event, "mean_abs_error")
+    worst_rmse = None if worst_rmse_event is None else event_value(worst_rmse_event, "rmse")
 
     result = {
         "label": (f"{len(compression_events)} compression events, " f"last iter {int(last_event['iteration'])}"),
+        "method_name": last_event.get("method_name", "unknown"),
+        "param_names": last_event.get("param_names", []),
+        "params": last_event.get("params", {}),
         "raw_restart_size": raw_restart_size,
         "approx_restart_size": approx_restart_size,
         "compressed_payload_size": compressed_payload_size,
@@ -543,10 +556,16 @@ def compute_compression_stats(latest_run, compression_events):
         # Worst-case reconstruction metrics over all compression events.
         "relative_l2_error": worst_l2_error,
         "max_abs_error": worst_max_abs_error,
+        "mean_abs_error": worst_mean_abs_error,
+        "rmse": worst_rmse,
         "worst_relative_l2_iteration": (None if worst_l2_event is None else int(worst_l2_event["iteration"])),
         "worst_relative_l2_file_index": (None if worst_l2_event is None else int(worst_l2_event["file_index"])),
         "worst_max_abs_iteration": (None if worst_max_abs_event is None else int(worst_max_abs_event["iteration"])),
         "worst_max_abs_file_index": (None if worst_max_abs_event is None else int(worst_max_abs_event["file_index"])),
+        "worst_mean_abs_iteration": (None if worst_mean_abs_event is None else int(worst_mean_abs_event["iteration"])),
+        "worst_mean_abs_file_index": (None if worst_mean_abs_event is None else int(worst_mean_abs_event["file_index"])),
+        "worst_rmse_iteration": (None if worst_rmse_event is None else int(worst_rmse_event["iteration"])),
+        "worst_rmse_file_index": (None if worst_rmse_event is None else int(worst_rmse_event["file_index"])),
         "worst_compression_ratio": (
             None if worst_ratio_event is None else event_value(worst_ratio_event, "compression_ratio")
         ),
@@ -579,10 +598,12 @@ def format_compression_stats(stats):
     for item in stats:
         lines.append("")
 
-        components = item.get("n_components")
-        component_text = f", PCA components: {components}" if components is not None else ""
+        method_name = item.get("method_name", "unknown")
+        params = item.get("params") or {}
+        param_text = ", ".join(f"{key}={value}" for key, value in params.items())
+        method_text = method_name if not param_text else f"{method_name}({param_text})"
 
-        lines.append(f"{item['label']}{component_text}")
+        lines.append(f"{item['label']}\n{method_text}")
 
         raw_size = item.get("raw_restart_size")
         compressed_size = item.get("compressed_payload_size")
@@ -591,11 +612,11 @@ def format_compression_stats(stats):
         if raw_size is not None and compressed_size is not None:
             lines.append(
                 f"  Raw restart:      {bytes_to_human(raw_size):>10}    "
-                f"Compressed PCA: {bytes_to_human(compressed_size):>10}"
+                f"Compressed payload: {bytes_to_human(compressed_size):>10}"
             )
         elif compressed_size is not None:
             lines.append(
-                f"  Raw restart:      unavailable    " f"Compressed PCA: {bytes_to_human(compressed_size):>10}"
+                f"  Raw restart:      unavailable    " f"Compressed payload: {bytes_to_human(compressed_size):>10}"
             )
         else:
             lines.append("  File sizes: unavailable")
@@ -654,6 +675,28 @@ def format_compression_stats(stats):
         else:
             lines.append("  Worst max abs error: unavailable")
 
+        mean_abs_error = item.get("mean_abs_error")
+        if mean_abs_error is not None:
+            worst_iter = item.get("worst_mean_abs_iteration")
+            worst_idx = item.get("worst_mean_abs_file_index")
+            location = (
+                f" at iter {worst_iter}, file {worst_idx:05d}"
+                if worst_iter is not None and worst_idx is not None
+                else ""
+            )
+            lines.append(f"  Worst mean abs error:   {mean_abs_error:.3e}{location}")
+
+        rmse = item.get("rmse")
+        if rmse is not None:
+            worst_iter = item.get("worst_rmse_iteration")
+            worst_idx = item.get("worst_rmse_file_index")
+            location = (
+                f" at iter {worst_iter}, file {worst_idx:05d}"
+                if worst_iter is not None and worst_idx is not None
+                else ""
+            )
+            lines.append(f"  Worst RMSE:             {rmse:.3e}{location}")
+
     return "\n".join(lines)
 
 
@@ -710,7 +753,7 @@ def plot_combined_errors_vs_baseline(ax, branches):
     eps_plot = 1e-16
 
     quantity_styles = {
-        "E_tot": {"label": r"$E_{tot}$", "marker": None},
+        "E_tot": {"label": r"$\mathcal{E}_{tot}$", "marker": None},
         "E_pot": {"label": r"$E_{pot}$", "marker": None},
         "M": {"label": r"$M$", "marker": None},
         "P": {"label": r"$P$", "marker": None},
@@ -729,8 +772,8 @@ def plot_combined_errors_vs_baseline(ax, branches):
 
         for quantity, style in quantity_styles.items():
             ax.semilogy(
-                t,
-                np.clip(errors[quantity], eps_plot, None),
+                t[1:],
+                np.clip(errors[quantity][1:], eps_plot, None),
                 marker=style["marker"],
                 markevery=max(1, len(t) // 25),
                 linewidth=1.3,
@@ -827,40 +870,40 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
         mass_variation = np.abs(data["M"] - mass_0) / abs(mass_0)
 
         main_axes[0].plot(
-            t,
-            data["E_tot"],
+            t[1:],
+            data["E_tot"][1:],
             color=color,
             linestyle=linestyle,
             label=name,
         )
 
         main_axes[1].semilogy(
-            t,
-            np.clip(data["E_pot"], eps_energy, None),
+            t[1:],
+            np.clip(data["E_pot"][1:], eps_energy, None),
             color=color,
             linestyle=linestyle,
             label=name,
         )
 
         main_axes[2].semilogy(
-            t,
-            np.clip(total_energy_variation, eps_conservation, None),
+            t[1:],
+            np.clip(total_energy_variation[1:], eps_conservation, None),
             color=color,
             linestyle=linestyle,
             label=name,
         )
 
         main_axes[3].semilogy(
-            t,
-            np.clip(momentum_variation, eps_conservation, None),
+            t[1:],
+            np.clip(momentum_variation[1:], eps_conservation, None),
             color=color,
             linestyle=linestyle,
             label=name,
         )
 
         main_axes[4].semilogy(
-            t,
-            np.clip(mass_variation, eps_conservation, None),
+            t[1:],
+            np.clip(mass_variation[1:], eps_conservation, None),
             color=color,
             linestyle=linestyle,
             label=name,
@@ -890,12 +933,12 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
         ax.set_xlabel("Time (t)")
         ax.legend(loc="upper right", bbox_to_anchor=(1.23, 1.0))
 
-    output_png = os.path.join(latest_run, "compression_analysis.png")
+    output_pdf = os.path.join(latest_run, "compression_analysis.pdf")
 
-    fig.savefig(output_png, dpi=300, bbox_inches="tight")
+    fig.savefig(output_pdf, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Analysis plot written to: {output_png}")
+    print(f"Analysis plot written to: {output_pdf}")
 
 
 def main():

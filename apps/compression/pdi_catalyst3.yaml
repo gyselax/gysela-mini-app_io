@@ -87,72 +87,72 @@ plugins:
           - absolute_time: '(${iter} + ${iter_offset}) * ${deltat}'
     on_finalize:
       - release: [iter_saved, absolute_time]
-  decl_hdf5:
-    - file: '${fdistribu_filename}'
-      communicator: $MPI_COMM_WORLD
-      on_event: [read_fdistribu]
-      datasets:
-        fdistribu:
-          type: array
-          subtype: double
-          size: ['$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]']
-      read:
-        fdistribu:
-          dataset_selection:
-            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
-            start: ['$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]']
-    - file: 'GYSELALIBXX_initstate.h5'
-      on_event: [initial_state]
-      collision_policy: replace_and_warn
-      write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
-    - file: 'GYSELALIBXX_${iter_saved:05}.h5'
-      communicator: $MPI_COMM_WORLD
-      on_event: [iteration, last_iteration]
-      when: '${iter} % ${nbstep_diag} = 0'
-      collision_policy: replace_and_warn
-      datasets:
-        fdistribu:
-          type: array
-          subtype: double
-          size: [ '$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]' ]
-      write:
-        time_saved: $absolute_time
-        fdistribu:
-          dataset_selection:
-            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
-            start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
-        electrostatic_potential: ~
-    - file: 'GYSELALIBXX_selected_${iter_saved:05}.h5'
-      communicator: $MPI_COMM_WORLD
-      on_event: [iteration, last_iteration]
-      when: '${iter} % ${nbstep_diag} = 0'
-      collision_policy: replace_and_warn
-      datasets:
-        fdistribu_selected:
-          type: array
-          subtype: double
-          size: [ '$MeshX_extents[0]', '$MeshVx_extents[0]' ]
-        fdistribu_selected_0:
-          type: array
-          subtype: double
-          size: [ '$MeshX_extents[0]' ]
-      write:
-        time_saved: $absolute_time
-        fdistribu:
-          dataset: fdistribu_selected
-          # dataset_selection:
-          #   size:  [ '$local_fdistribu_extents[1]']
-          #   start: [ '$local_fdistribu_starts[1]']
-          # memory_selection:
-          #   size: [ 1, '$local_fdistribu_extents[1]', 1, 1, 1]
-          #   start: [0, 0, 16, 0, 17]
+  # decl_hdf5:
+  #   - file: '${fdistribu_filename}'
+  #     communicator: $MPI_COMM_WORLD
+  #     on_event: [read_fdistribu]
+  #     datasets:
+  #       fdistribu:
+  #         type: array
+  #         subtype: double
+  #         size: ['$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]']
+  #     read:
+  #       fdistribu:
+  #         dataset_selection:
+  #           size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+  #           start: ['$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]']
+  #   - file: 'GYSELALIBXX_initstate.h5'
+  #     on_event: [initial_state]
+  #     collision_policy: replace_and_warn
+  #     write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
+  #   - file: 'GYSELALIBXX_${iter_saved:05}.h5'
+  #     communicator: $MPI_COMM_WORLD
+  #     on_event: [iteration, last_iteration]
+  #     when: '${iter} % ${nbstep_diag} = 0'
+  #     collision_policy: replace_and_warn
+  #     datasets:
+  #       fdistribu:
+  #         type: array
+  #         subtype: double
+  #         size: [ '$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]' ]
+  #     write:
+  #       time_saved: $absolute_time
+  #       fdistribu:
+  #         dataset_selection:
+  #           size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+  #           start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
+  #       electrostatic_potential: ~
+  #   - file: 'GYSELALIBXX_selected_${iter_saved:05}.h5'
+  #     communicator: $MPI_COMM_WORLD
+  #     on_event: [iteration, last_iteration]
+  #     when: '${iter} % ${nbstep_diag} = 0'
+  #     collision_policy: replace_and_warn
+  #     datasets:
+  #       fdistribu_selected:
+  #         type: array
+  #         subtype: double
+  #         size: [ '$MeshX_extents[0]', '$MeshVx_extents[0]' ]
+  #       fdistribu_selected_0:
+  #         type: array
+  #         subtype: double
+  #         size: [ '$MeshX_extents[0]' ]
+  #     write:
+  #       time_saved: $absolute_time
+  #       fdistribu:
+  #         dataset: fdistribu_selected
+  #         # dataset_selection:
+  #         #   size:  [ '$local_fdistribu_extents[1]']
+  #         #   start: [ '$local_fdistribu_starts[1]']
+  #         # memory_selection:
+  #         #   size: [ 1, '$local_fdistribu_extents[1]', 1, 1, 1]
+  #         #   start: [0, 0, 16, 0, 17]
 
-          dataset_selection:
-            size:  [ '$local_fdistribu_extents[1]', '$local_fdistribu_extents[3]']
-            start: [ '$local_fdistribu_starts[1]',  '$local_fdistribu_starts[3]' ]
-          memory_selection:
-            size: [ 1, '$local_fdistribu_extents[1]', 1, '$local_fdistribu_extents[3]', 1]
-            start: [0, 0, 16, 0, 17]
+  #         dataset_selection:
+  #           size:  [ '$local_fdistribu_extents[1]', '$local_fdistribu_extents[3]']
+  #           start: [ '$local_fdistribu_starts[1]',  '$local_fdistribu_starts[3]' ]
+  #         memory_selection:
+  #           size: [ 1, '$local_fdistribu_extents[1]', 1, '$local_fdistribu_extents[3]', 1]
+  #           start: [0, 0, 16, 0, 17]
         
   # trace: info
   pycall:

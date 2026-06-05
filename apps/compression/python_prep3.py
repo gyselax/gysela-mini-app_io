@@ -29,11 +29,11 @@ def prep4catalyst(fdistribu_py, electrostatic_potential_py, iter_py, meshx_py, m
     time = iter_py * 0.1
 
 
-    PT_VX=int(local_fdistribu_extents_py[3]/2)
+    PT_Y=int(local_fdistribu_extents_py[2]/2)
     PT_VY=int(local_fdistribu_extents_py[4]/2)
 
-    fdistribu_selected=fdistribu_py[0, :, :, PT_VX, PT_VY]
-    
+    fdistribu_selected=fdistribu_py[0, :, PT_Y, :, PT_VY]
+    coord_X = meshvx_py[local_fdistribu_starts_py[3]:local_fdistribu_starts_py[3]+local_fdistribu_extents_py[3]]
     # coordonnee dans le champs de vitesse
 
 
@@ -43,8 +43,8 @@ def prep4catalyst(fdistribu_py, electrostatic_potential_py, iter_py, meshx_py, m
                     ("time", time, pdi.OUT),
                     ("bidon", fdistribu_selected, pdi.OUT),
                     ("local_points_X", meshx_py, pdi.OUT),
-                    ("local_points_Y", meshy_py, pdi.OUT),
-                    ("bidon_electro_prot", electrostatic_potential_py, pdi.OUT),
+                    ("local_points_Y", coord_X, pdi.OUT),
+                    # ("bidon_electro_prot", electrostatic_potential_py, pdi.OUT),
                     ])
     
 

@@ -133,14 +133,14 @@ plugins:
         with: {meshx_py: $MeshX, meshy_py: $MeshY, meshvx_py: $MeshVx, meshvy_py: $MeshVy, local_fdistribu_extents_py: $local_fdistribu_extents, local_fdistribu_starts_py: $local_fdistribu_starts}
         exec: |
           
-          from python_prep2 import print_mesh_info
+          from python_prep3 import print_mesh_info
           print_mesh_info(meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py)
 
       iteration:
         with: {fdistribu_py: $fdistribu, electrostatic_potential_py: $electrostatic_potential, iter_py: $iter, meshx_py: $MeshX, meshy_py: $MeshY, meshvx_py: $MeshVx, meshvy_py: $MeshVy, local_fdistribu_extents_py: $local_fdistribu_extents, local_fdistribu_starts_py: $local_fdistribu_starts}
         exec: |
           import mpi4py
-          from python_prep2 import prep4catalyst
+          from python_prep3 import prep4catalyst
           prep4catalyst(fdistribu_py, electrostatic_potential_py, iter_py, meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py)
           
 
@@ -167,7 +167,7 @@ plugins:
                     size: '$local_fdistribu_extents[1]'
                   y:
                     PDI_data_array: "local_points_Y"
-                    size: '$local_fdistribu_extents[2]'
+                    size: '$local_fdistribu_extents[3]'
             topologies:
               my_mesh:
                 type: "rectilinear"
@@ -179,12 +179,5 @@ plugins:
                 volume_dependent: "false"
                 values:
                   PDI_data_array: "bidon"
-                  size: '$local_fdistribu_extents[1]*$local_fdistribu_extents[2]'
-              electro_potential:
-                association: "vertex"
-                topology: "my_mesh"
-                volume_dependent: "false"
-                values:
-                  PDI_data_array: "bidon_electro_prot"
-                  size: '$local_fdistribu_extents[1]*$local_fdistribu_extents[2]'
-        
+                  size: '$local_fdistribu_extents[1]*$local_fdistribu_extents[3]'
+              

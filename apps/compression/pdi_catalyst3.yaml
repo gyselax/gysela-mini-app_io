@@ -70,11 +70,7 @@ data:
   bidon:
     type: array
     subtype: double
-    size: [ '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
-  bidon_bis:
-    type: array
-    subtype: double
-    size: [ '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+    size: [ '$local_fdistribu_extents[1]', '$local_fdistribu_extents[3]' ]
 
 plugins:
   mpi:
@@ -126,22 +122,53 @@ plugins:
             size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
             start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
         electrostatic_potential: ~
+    - file: 'GYSELALIBXX_selected_${iter_saved:05}.h5'
+      communicator: $MPI_COMM_WORLD
+      on_event: [iteration, last_iteration]
+      when: '${iter} % ${nbstep_diag} = 0'
+      collision_policy: replace_and_warn
+      datasets:
+        fdistribu_selected:
+          type: array
+          subtype: double
+          size: [ '$MeshX_extents[0]', '$MeshVx_extents[0]' ]
+        fdistribu_selected_0:
+          type: array
+          subtype: double
+          size: [ '$MeshX_extents[0]' ]
+      write:
+        time_saved: $absolute_time
+        fdistribu:
+          dataset: fdistribu_selected
+          # dataset_selection:
+          #   size:  [ '$local_fdistribu_extents[1]']
+          #   start: [ '$local_fdistribu_starts[1]']
+          # memory_selection:
+          #   size: [ 1, '$local_fdistribu_extents[1]', 1, 1, 1]
+          #   start: [0, 0, 16, 0, 17]
+
+          dataset_selection:
+            size:  [ '$local_fdistribu_extents[1]', '$local_fdistribu_extents[3]']
+            start: [ '$local_fdistribu_starts[1]',  '$local_fdistribu_starts[3]' ]
+          memory_selection:
+            size: [ 1, '$local_fdistribu_extents[1]', 1, '$local_fdistribu_extents[3]', 1]
+            start: [0, 0, 16, 0, 17]
+        
   # trace: info
   pycall:
     on_event:
       initial_catalyst:
         with: {meshx_py: $MeshX, meshy_py: $MeshY, meshvx_py: $MeshVx, meshvy_py: $MeshVy, local_fdistribu_extents_py: $local_fdistribu_extents, local_fdistribu_starts_py: $local_fdistribu_starts}
         exec: |
-          
           from python_prep3 import print_mesh_info
           print_mesh_info(meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py)
 
       iteration:
-        with: {fdistribu_py: $fdistribu, electrostatic_potential_py: $electrostatic_potential, iter_py: $iter, meshx_py: $MeshX, meshy_py: $MeshY, meshvx_py: $MeshVx, meshvy_py: $MeshVy, local_fdistribu_extents_py: $local_fdistribu_extents, local_fdistribu_starts_py: $local_fdistribu_starts}
+        with: {fdistribu_py: $fdistribu, electrostatic_potential_py: $electrostatic_potential, iter_py: $iter, time_py: $absolute_time, meshx_py: $MeshX, meshy_py: $MeshY, meshvx_py: $MeshVx, meshvy_py: $MeshVy, local_fdistribu_extents_py: $local_fdistribu_extents, local_fdistribu_starts_py: $local_fdistribu_starts}
         exec: |
           import mpi4py
           from python_prep3 import prep4catalyst
-          prep4catalyst(fdistribu_py, electrostatic_potential_py, iter_py, meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py)
+          prep4catalyst(fdistribu_py, electrostatic_potential_py, iter_py, time_py, meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py)
           
 
   catalyst:
@@ -163,11 +190,11 @@ plugins:
                 type: "rectilinear"
                 values:
                   x:
-                    PDI_data_array: "local_points_X"
-                    size: '$local_fdistribu_extents[1]'
-                  y:
                     PDI_data_array: "local_points_Y"
                     size: '$local_fdistribu_extents[3]'
+                  y:
+                    PDI_data_array: "local_points_X"
+                    size: '$local_fdistribu_extents[1]'
             topologies:
               my_mesh:
                 type: "rectilinear"

@@ -31,7 +31,7 @@ renderView1.Background = [0.0, 0.0, 0.0]
 
 # get color transfer function/color map for 'velocity'
 FP_fdistribu = GetColorTransferFunction('fixed_point_fdistribu')
-FP_fdistribu.RGBPoints = [0.0, 0.231373, 0.298039, 0.752941, 29.205000000000002, 0.865003, 0.865003, 0.865003, 58.410000000000004, 0.705882, 0.0156863, 0.14902]
+# FP_fdistribu.RGBPoints = [0.0, 0.231373, 0.298039, 0.752941, 29.205000000000002, 0.865003, 0.865003, 0.865003, 58.410000000000004, 0.705882, 0.0156863, 0.14902]
 FP_fdistribu.ScalarRangeInitialized = 1.0
 
 # show data from grid

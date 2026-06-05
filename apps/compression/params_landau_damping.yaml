@@ -29,7 +29,7 @@ SpeciesInfo:
 
 Algorithm:
   deltat: 0.25
-  nbiter: 50
+  nbiter: 200
 
 CompressionBenchmark:
   compression_period: 10

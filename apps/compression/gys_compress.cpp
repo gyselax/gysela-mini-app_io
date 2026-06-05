@@ -131,7 +131,8 @@ void init_two_stream(
     int const perturb_mode =
         static_cast<int>(PCpp_int(conf_isp, ".perturb_mode"));
     double const kx = perturb_mode * 2. * M_PI / length_x;
-    double const ky = perturb_mode * 2. * M_PI / length_y;
+    double const ky = 0;
+    // perturb_mode * 2. * M_PI / length_y;
 
     ddc::parallel_for_each(
         Kokkos::DefaultExecutionSpace(),

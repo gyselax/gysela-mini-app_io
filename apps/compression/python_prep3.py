@@ -1,7 +1,6 @@
 # class Mesh:
 from mpi4py import MPI
 import pdi
-import h5py
 import numpy as np
 
 def print_mesh_info(meshx_py, meshy_py, meshvx_py, meshvy_py, local_fdistribu_extents_py, local_fdistribu_starts_py) :

@@ -104,6 +104,12 @@ data:
     type: array
     subtype: double
     size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
+  fdistribu_sptor3Dv2D_host_int: int
+    
+  fdistribu_sptor3Dv2D_host: 
+    type: array
+    subtype: double
+    size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
 
   #-- Fluid moments (4D: species × tor1 × tor2 × tor3)
   density:
@@ -121,6 +127,13 @@ data:
 
 plugins:
   mpi:
+  user_code:
+    on_event:
+      MemCopy:
+        memory_copy:
+      MemCopy_bis:
+        wfmemcopy:
+
   pycall:
     on_event:
       Init:
@@ -130,12 +143,13 @@ plugins:
           import numpy as np
           from fluid_moments import FluidMoments
       FluidMoments:
-        with: {fdistribu_raw: $fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
+        # with: {fdistribu_raw: $fdistribu_sptor3Dv2D_host, vpar_vals: $vpar, mu_vals: $mu}
+        with: {fdistribu_raw: $fdistribu_sptor3Dv2D_host, vpar_vals: $vpar, mu_vals: $mu}
         exec: |
           import xarray as xr
           import numpy as np
           from fluid_moments import FluidMoments
-
+          print("======================= using host data ")
           fdistribu = xr.DataArray(
               fdistribu_raw,
               dims=('species', 'tor1', 'tor2', 'tor3', 'vpar', 'mu')
@@ -154,118 +168,119 @@ plugins:
               'temperature': temperature,
           })
           ds_out.to_netcdf('fluid_moments.nc')
-  decl_hdf5:
-    #-- Read file names and expose them to PDI
-    - file: '${gysela_io_filename}'
-      on_event: [ReadFileNames]
-      read:
-        gysela_io_filename_size: ~
-        gysela_io_filename: ~
-    
-    #-- Read species info
-    - file: '${gysela_io_filename}'
-      on_event: [read_species]
-      read:
-        species: ~
-        masses: ~
-        charges: ~
-
-    #-- Read mesh
-    - file: '${gysela_io_filename}'
-      on_event: [read_tor1_extents]
-      read:
-        breakpoints_tor1_extents: {size_of: breakpoints_tor1}
-        tor1_extents: {size_of: tor1}
-    - file: '${gysela_io_filename}'
-      on_event: [read_tor1]
-      read:
-        breakpoints_tor1: ~
-        tor1: ~
-    - file: '${gysela_io_filename}'
-      on_event: [read_tor2_extents]
-      read:
-        breakpoints_tor2_extents: {size_of: breakpoints_tor2}
-        tor2_extents: {size_of: tor2}
-    - file: '${gysela_io_filename}'
-      on_event: [read_tor2]
-      read:
-        breakpoints_tor2: ~
-        tor2: ~
-    - file: '${gysela_io_filename}'
-      on_event: [read_tor3_extents]
-      read:
-        breakpoints_tor3_extents: {size_of: breakpoints_tor3}
-        tor3_extents: {size_of: tor3}
-    - file: '${gysela_io_filename}'
-      on_event: [read_tor3]
-      read:
-        breakpoints_tor3: ~
-        tor3: ~
-    - file: '${gysela_io_filename}'
-      on_event: [read_vpar_extents]
-      read:
-        breakpoints_vpar_extents: {size_of: breakpoints_vpar}
-        vpar_extents: {size_of: vpar}
-    - file: '${gysela_io_filename}'
-      on_event: [read_vpar]
-      read:
-        breakpoints_vpar: ~
-        vpar: ~
-    - file: '${gysela_io_filename}'
-      on_event: [read_mu_extents]
-      read:
-        breakpoints_mu_extents: {size_of: breakpoints_mu}
-        mu_extents: {size_of: mu}
-    - file: '${gysela_io_filename}'
-      on_event: [read_mu]
-      read:
-        breakpoints_mu: ~
-        mu: ~
-
-    #-- Read distribution function
-    - file: '${gysela_io_filename}'
-      on_event: [read_fdistribu]
-      read:
-        fdistribu_sptor3Dv2D:
-            dataset_selection:
-              size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
-              start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]
-
-    #-- Write timing (as table: names and values arrays)
-    - file: 'cpu_time.h5'
-      on_event: [write_timing]
-      collision_policy: replace_and_warn
-      write:
-        timing_names: ~
-        timing_values: ~
         
-    #-- Write distribution function and coordinates
-    - file: 'fdistribu_5D_output.h5'
-      on_event: [write_fdistribu]
-      collision_policy: replace_and_warn
-      communicator: $MPI_COMM_WORLD
-      datasets:
-        fdistribu_sptor3Dv2D:
-          type: array
-          subtype: double
-          size: [ '$species_extents[0]', '$tor1_extents[0]', '$tor2_extents[0]', '$tor3_extents[0]', '$vpar_extents[0]', '$mu_extents[0]' ]
-      write:
-        tor1: ~
-        tor2: ~
-        tor3: ~
-        vpar: ~
-        mu: ~
-        fdistribu_sptor3Dv2D:
-            dataset_selection:
-              size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
-              start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]
+  # decl_hdf5:
+  #   #-- Read file names and expose them to PDI
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [ReadFileNames]
+  #     read:
+  #       gysela_io_filename_size: ~
+  #       gysela_io_filename: ~
+    
+  #   #-- Read species info
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_species]
+  #     read:
+  #       species: ~
+  #       masses: ~
+  #       charges: ~
 
-    #-- Write fluid moments
-    - file: 'fluid_moments.h5'
-      on_event: [write_fluid_moments]
-      collision_policy: replace_and_warn
-      write:
-        density: ~
-        mean_velocity: ~
-        temperature: ~
-trace: ~
+  #   #-- Read mesh
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_tor1_extents]
+  #     read:
+  #       breakpoints_tor1_extents: {size_of: breakpoints_tor1}
+  #       tor1_extents: {size_of: tor1}
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_tor1]
+  #     read:
+  #       breakpoints_tor1: ~
+  #       tor1: ~
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_tor2_extents]
+  #     read:
+  #       breakpoints_tor2_extents: {size_of: breakpoints_tor2}
+  #       tor2_extents: {size_of: tor2}
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_tor2]
+  #     read:
+  #       breakpoints_tor2: ~
+  #       tor2: ~
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_tor3_extents]
+  #     read:
+  #       breakpoints_tor3_extents: {size_of: breakpoints_tor3}
+  #       tor3_extents: {size_of: tor3}
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_tor3]
+  #     read:
+  #       breakpoints_tor3: ~
+  #       tor3: ~
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_vpar_extents]
+  #     read:
+  #       breakpoints_vpar_extents: {size_of: breakpoints_vpar}
+  #       vpar_extents: {size_of: vpar}
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_vpar]
+  #     read:
+  #       breakpoints_vpar: ~
+  #       vpar: ~
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_mu_extents]
+  #     read:
+  #       breakpoints_mu_extents: {size_of: breakpoints_mu}
+  #       mu_extents: {size_of: mu}
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_mu]
+  #     read:
+  #       breakpoints_mu: ~
+  #       mu: ~
+
+  #   #-- Read distribution function
+  #   - file: '${gysela_io_filename}'
+  #     on_event: [read_fdistribu]
+  #     read:
+  #       fdistribu_sptor3Dv2D:
+  #           dataset_selection:
+  #             size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
+  #             start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]
+
+  #   #-- Write timing (as table: names and values arrays)
+  #   - file: 'cpu_time.h5'
+  #     on_event: [write_timing]
+  #     collision_policy: replace_and_warn
+  #     write:
+  #       timing_names: ~
+  #       timing_values: ~
+        
+  #   #-- Write distribution function and coordinates
+  #   - file: 'fdistribu_5D_output.h5'
+  #     on_event: [write_fdistribu]
+  #     collision_policy: replace_and_warn
+  #     communicator: $MPI_COMM_WORLD
+  #     datasets:
+  #       fdistribu_sptor3Dv2D:
+  #         type: array
+  #         subtype: double
+  #         size: [ '$species_extents[0]', '$tor1_extents[0]', '$tor2_extents[0]', '$tor3_extents[0]', '$vpar_extents[0]', '$mu_extents[0]' ]
+  #     write:
+  #       tor1: ~
+  #       tor2: ~
+  #       tor3: ~
+  #       vpar: ~
+  #       mu: ~
+  #       fdistribu_sptor3Dv2D:
+  #           dataset_selection:
+  #             size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
+  #             start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]
+
+  #   #-- Write fluid moments
+  #   - file: 'fluid_moments.h5'
+  #     on_event: [write_fluid_moments]
+  #     collision_policy: replace_and_warn
+  #     write:
+  #       density: ~
+  #       mean_velocity: ~
+  #       temperature: ~
+trace: debug

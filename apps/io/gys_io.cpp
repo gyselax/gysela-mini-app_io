@@ -275,9 +275,8 @@ void write_fdistribu(int rank, IdxRangeSpTor3DV2D const &local_mesh,
   expose_mesh_to_pdi("mu", IdxRange<GridMu>(global_mesh));
   // Expose distribution function to PDI and trigger write event
 
-  // ddc::PdiEvent("write_fdistribu_memcopy")
-  ddc::PdiEvent("MemCopy_bis")
-      .with("fdistribu_sptor3Dv2D", allfdistribu);
+  ddc::PdiEvent("fdistribu_MCP_event")
+      .with("fdistribu_sptor3Dv2D_device", allfdistribu);
 
   if (rank == 0) {
     cout << "5D distribution function and coordinates written successfully."
@@ -447,7 +446,7 @@ void compute_fluid_moments_pycall(
   expose_mesh_to_pdi("vpar", IdxRange<GridVpar>(global_mesh));
   expose_mesh_to_pdi("mu", IdxRange<GridMu>(global_mesh));
   // Expose distribution function to PDI and trigger Pycall Fluid Moments event
-  ddc::PdiEvent("MemCopy").with("fdistribu_sptor3Dv2D", allfdistribu);
+  ddc::PdiEvent("FluidMoments_MCP_event").with("fdistribu_sptor3Dv2D_device", allfdistribu);
 
   // ddc::PdiEvent("FluidMoments").with("fdistribu_sptor3Dv2D", allfdistribu);
 

@@ -99,18 +99,11 @@ metadata:
   temperature_extents: { type: array, subtype: size_t, size: 4 }
 
 data:
-  #-- Distribution function
-  fdistribu_sptor3Dv2D:
-    type: array
-    subtype: double
-    size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
-  fdistribu_sptor3Dv2D_host_int: int
-    
-  fdistribu_sptor3Dv2D_host: 
-    type: array
-    subtype: double
-    size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
 
+  fdistribu_sptor3Dv2D: 
+    type: array
+    subtype: double
+    size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
   #-- Fluid moments (4D: species × tor1 × tor2 × tor3)
   density:
     type: array
@@ -129,10 +122,10 @@ plugins:
   mpi:
   user_code:
     on_event:
-      MemCopy:
-        memory_copy:
-      MemCopy_bis:
-        wfmemcopy:
+      FluidMoments_MCP_event:
+        fm_mem_copy:
+      fdistribu_MCP_event:
+        fdistribu_mem_copy:
 
   pycall:
     on_event:
@@ -144,12 +137,11 @@ plugins:
           from fluid_moments import FluidMoments
       FluidMoments:
         # with: {fdistribu_raw: $fdistribu_sptor3Dv2D_host, vpar_vals: $vpar, mu_vals: $mu}
-        with: {fdistribu_raw: $fdistribu_sptor3Dv2D_host, vpar_vals: $vpar, mu_vals: $mu}
+        with: {fdistribu_raw: $fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
         exec: |
           import xarray as xr
           import numpy as np
           from fluid_moments import FluidMoments
-          print("======================= using host data ")
           fdistribu = xr.DataArray(
               fdistribu_raw,
               dims=('species', 'tor1', 'tor2', 'tor3', 'vpar', 'mu')

@@ -111,6 +111,7 @@ metadata:
   local_temperature_extents: { type: array, subtype: size_t, size: 4 }
 
 data:
+  #-- Distribution function
   fdistribu_sptor3Dv2D:
     type: array
     subtype: double
@@ -121,6 +122,7 @@ data:
     type: array
     subtype: double
     size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
+
   #-- Fluid moments (4D: species × tor1 × tor2 × tor3)
   local_density:
     type: array
@@ -168,7 +170,6 @@ plugins:
       FluidMoments:
         with: {fdistribu_raw: $fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
         exec: |
-
           fdistribu = xr.DataArray(
               fdistribu_raw,
               dims=( 'species', 'tor1', 'tor2', 'tor3', 'vpar', 'mu'),

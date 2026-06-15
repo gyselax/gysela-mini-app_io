@@ -415,7 +415,7 @@ void write_fluid_moments(int rank,
 void compute_fluid_moments_pycall(
     int rank, IdxRangeSpTor3DV2D const &local_mesh,
     IdxRangeSpTor3DV2D const &global_mesh,
-    host_t<DFieldMemSpGrid> const &allfdistribu) {
+    DFieldMemSpGrid const &allfdistribu) {
   if (rank == 0) {
     cout << "Computing Fluid Moments in Pycall event." << endl;
   }
@@ -592,10 +592,7 @@ int main(int argc, char **argv) {
       // in PDI
       compute_fluid_moments_pycall(rank, local_mesh, global_mesh,
                                    allfdistribu);
-      // Create a working copy from the current distribution
-      // ddc::parallel_deepcopy(
-      //     allfdistribu_work,
-      //     allfdistribu_host); // alldistribu_work <--- allfdistribu
+
       // Update the working copy (not the original)
       if (rank == 0) {
         cout << "Updating distribution function" << endl;

@@ -170,7 +170,7 @@ plugins:
         exec: |
 
           fdistribu = xr.DataArray(
-              local_fdistribu_raw,
+              fdistribu_raw,
               dims=( 'species', 'tor1', 'tor2', 'tor3', 'vpar', 'mu'),
           )
 
@@ -287,11 +287,10 @@ plugins:
         tor3: ~
         vpar: ~
         mu: ~
-        local_fdistribu_sptor3Dv2D:
-          dataset: fdistribu_sptor3Dv2D
+        fdistribu_sptor3Dv2D:
           dataset_selection:
-            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
-            start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]
+            size: [ '$fdistribu_extents[0]', '$fdistribu_extents[1]', '$fdistribu_extents[2]', '$fdistribu_extents[3]', '$fdistribu_extents[4]', '$fdistribu_extents[5]' ]
+            start: [ '$fdistribu_starts[0]', '$fdistribu_starts[1]', '$fdistribu_starts[2]', '$fdistribu_starts[3]', '$fdistribu_starts[4]', '$fdistribu_starts[5]' ]
 
     #-- Write fluid moments
     - file: 'fluid_moments.h5'

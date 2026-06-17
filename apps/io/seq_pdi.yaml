@@ -155,7 +155,7 @@ plugins:
   user_code:
     on_event:
       FluidMoments_MCP_event:
-        fm_mem_copy:
+        fluidmoments_mem_copy:
       fdistribu_MCP_event:
         fdistribu_mem_copy:
 

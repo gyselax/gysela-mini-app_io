@@ -67,6 +67,75 @@ data:
 
 plugins:
   mpi:
+  pycall:
+    on_event:
+      Init:
+        with: {}
+        exec: |
+          import numpy as np
+          import dask.array as da
+          from measure import init_measure_config, run_measure_insitu, get_measure_config
+      initial_state:
+        with: {MeshX: $MeshX, MeshY: $MeshY, MeshVx: $MeshVx, MeshVy: $MeshVy}
+        exec: |
+          from measure import init_measure_config
+          init_measure_config(MeshX, MeshY, MeshVx, MeshVy)
+      iteration:
+        with:
+          fdistribu: $fdistribu
+          phi: $electrostatic_potential
+          it: $iter
+          t: $absolute_time
+          iter_offset: $iter_offset
+          MeshX: $MeshX
+          MeshY: $MeshY
+          MeshVx: $MeshVx
+          MeshVy: $MeshVy
+        exec: |
+          from measure import get_measure_config, init_measure_config, run_measure_insitu
+          try:
+              get_measure_config()
+          except RuntimeError:
+              init_measure_config(MeshX, MeshY, MeshVx, MeshVy)
+          run_measure_insitu(
+              fdistribu,
+              phi,
+              it,
+              t,
+              iter_offset=iter_offset,
+              x=MeshX,
+              y=MeshY,
+              vx=MeshVx,
+              vy=MeshVy,
+          )
+      last_iteration:
+        with:
+          fdistribu: $fdistribu
+          phi: $electrostatic_potential
+          it: $iter
+          t: $absolute_time
+          iter_offset: $iter_offset
+          MeshX: $MeshX
+          MeshY: $MeshY
+          MeshVx: $MeshVx
+          MeshVy: $MeshVy
+        exec: |
+          from measure import get_measure_config, init_measure_config, run_measure_insitu
+          try:
+              get_measure_config()
+          except RuntimeError:
+              init_measure_config(MeshX, MeshY, MeshVx, MeshVy)
+          run_measure_insitu(
+              fdistribu,
+              phi,
+              it,
+              t,
+              iter_offset=iter_offset,
+              x=MeshX,
+              y=MeshY,
+              vx=MeshVx,
+              vy=MeshVy,
+          )
   set_value:
     on_init:
       - share:

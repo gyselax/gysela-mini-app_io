@@ -11,25 +11,43 @@ This mini application:
 - Computes fluid moments (density, mean velocity, temperature) via C++ integration or in-situ Python computation
 - Measures and saves CPU timing statistics
 
+### Installation
+
+For CPU use cases :
+```bash
+./toolchains/cpu.spack.mini_app_io_env/prepare.sh
+```
+Then insert the correct <MACHINE> toolchain path in the `gysela-mini-app_io/apps/io/activate_deisa_spack_env.sh` line 4.
+
+### Persee XEON
+
+If you run on persee, the environment is already available. You have nothing to change.
+
 ## Usage
 
+### Basic run
+
 ```bash
-mpirun -n <nprocs> ./gys_io [config.yaml] [pdi_config.yml]
+./apps/io/deisa-dask_launch_script.sh <nsimu_procs> <nworker_proc> [pdi_config.yml] [analytics_script.py]
 ```
 
-- `config.yaml`: Input configuration file (default: uses built-in defaults)
-- `pdi_config.yml`: PDI configuration file (default: uses `pdi_default.yml.hpp`)
+- `nsimu_procs`: number of MPI ranks for the simulation
+- `nworker_proc`: number of Dask workers to use for the analytics
+- `pdi_config.yml`: PDI configuration file (default: uses `pdi_deisa.yaml`)
+- `analytics_script.py`: the analytics script to launch (either `analytics.py` if you chose `pdi_deisa.yaml`, or `optimised_analytics.py` if you chose `optimised_pdi_deisa.yaml`)
 
-### Example
+
+### Sequential Run
 
 ```bash
-mpirun -n 4 ./gys_io gys_io.yaml
+source toolcahins/<machine>/[prepare.sh | environment.sh]
+mpirun -n <nprocs> ./build/apps/io/gys_io [config.yaml] seq_pdi.yaml
 ```
 
-Do not forget to activate the python venv if you are using PyCall:
+### Run with OAR
 
 ```bash
-source .gys_env/bin/activate
+./apps/io/oar_deisa-dask_launch_script.sh <nsimu_procs> <nworker_proc>
 ```
 
 `.gys_env/` is created by `./installer.sh` at the repository root.

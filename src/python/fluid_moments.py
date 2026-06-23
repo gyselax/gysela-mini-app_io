@@ -1,3 +1,5 @@
+import xarray as xr
+
 # -------------------------------------------------
 # 1. Quadrature
 # -------------------------------------------------
@@ -22,21 +24,27 @@ def get_trapezoid_weights_1d(coord):
 # -------------------------------------------------
 class FluidMoments:
     def __init__(self, vpar_coord, mu_coord):
-        self.vpar = vpar_coord
-        self.mu = mu_coord
+        self.vpar = xr.DataArray(
+                vpar_coord,
+                dims=('vpar'),
+        )
+        self.mu = xr.DataArray(
+                mu_coord,
+                dims=('mu'),
+        )
 
-        w_vpar = get_trapezoid_weights_1d(vpar_coord)
-        w_mu = get_trapezoid_weights_1d(mu_coord)
-
+        w_vpar = get_trapezoid_weights_1d(self.vpar)
+        w_mu = get_trapezoid_weights_1d(self.mu)
         self.weights = w_vpar * w_mu
 
     def compute_density(self, f):
-        return (f * self.weights).sum(dim=("vpar", "mu"))
+        return (f * self.weights).sum(dim=("vpar", "mu")).compute()
 
     def compute_velocity(self, f, density):
         momentum = (f * self.vpar * self.weights).sum(dim=("vpar", "mu"))
-        return momentum / density
+        return (momentum / density).compute()
 
     def compute_temperature(self, f, density, velocity):
         diff2 = (self.vpar - velocity) ** 2
-        return (f * diff2 * self.weights).sum(dim=("vpar", "mu")) / density
+        return ((f * diff2 * self.weights).sum(dim=("vpar", "mu")) / density).compute()
+

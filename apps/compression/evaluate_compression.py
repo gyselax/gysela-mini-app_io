@@ -1,135 +1,11 @@
 import argparse
+import csv
 import glob
 import os
-import re
 
-from tqdm import tqdm
-import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
-
-class Landau2X2VMoments:
-    def __init__(self, x, y, vx, vy):
-        self.x = np.asarray(x)
-        self.y = np.asarray(y)
-        self.vx = np.asarray(vx)
-        self.vy = np.asarray(vy)
-
-        self.dx = self.x[1] - self.x[0]
-        self.dy = self.y[1] - self.y[0]
-        self.dvx = self.vx[1] - self.vx[0]
-        self.dvy = self.vy[1] - self.vy[0]
-
-        self.dV_2D = self.dx * self.dy
-        self.dV_4D = self.dx * self.dy * self.dvx * self.dvy
-
-        self.vx2 = self.vx**2
-        self.vy2 = self.vy**2
-
-        self.expected_f_shape = (
-            self.x.size,
-            self.y.size,
-            self.vx.size,
-            self.vy.size,
-        )
-
-    def validate_distribution(self, f_shape, filepath=None):
-        if len(f_shape) != 4:
-            location = f" in {filepath}" if filepath is not None else ""
-            raise RuntimeError(
-                f"Unexpected fdistribu rank{location}: {f_shape}. " "Expected shape (Nx, Ny, Nvx, Nvy) for one species."
-            )
-
-        if tuple(f_shape) != self.expected_f_shape:
-            location = f" in {filepath}" if filepath is not None else ""
-            raise RuntimeError(
-                f"Unexpected fdistribu shape{location}: {f_shape}. " f"Expected {self.expected_f_shape}."
-            )
-
-    def compute_distribution_moments(self, f):
-        """
-        Compute mass, momentum and kinetic energy.
-
-        f shape is expected to be (Nx, Ny, Nvx, Nvy).
-        """
-        total_f = np.sum(f, dtype=np.float64)
-
-        f_vx = np.sum(f, axis=(0, 1, 3), dtype=np.float64)
-
-        f_vy = np.sum(f, axis=(0, 1, 2), dtype=np.float64)
-
-        mass = total_f * self.dV_4D
-
-        momentum_x = np.dot(f_vx, self.vx) * self.dV_4D
-        momentum_y = np.dot(f_vy, self.vy) * self.dV_4D
-        momentum_norm = np.sqrt(momentum_x**2 + momentum_y**2)
-
-        kinetic_energy = 0.5 * (np.dot(f_vx, self.vx2) + np.dot(f_vy, self.vy2)) * self.dV_4D
-
-        return mass, momentum_x, momentum_y, momentum_norm, kinetic_energy
-
-    def compute_potential_energy(self, phi):
-        if phi.shape != (self.x.size, self.y.size):
-            raise RuntimeError(
-                f"Unexpected electrostatic_potential shape: {phi.shape}. " f"Expected {(self.x.size, self.y.size)}."
-            )
-
-        dphi_dx = (np.roll(phi, -1, axis=0) - np.roll(phi, 1, axis=0)) / (2.0 * self.dx)
-
-        dphi_dy = (np.roll(phi, -1, axis=1) - np.roll(phi, 1, axis=1)) / (2.0 * self.dy)
-
-        electric_field_x = -dphi_dx
-        electric_field_y = -dphi_dy
-
-        return (
-            0.5
-            * np.sum(
-                electric_field_x**2 + electric_field_y**2,
-                dtype=np.float64,
-            )
-            * self.dV_2D
-        )
-
-    def compute_file_diagnostics(self, filepath, dt, nbstep_diag):
-        file_idx = get_file_index(filepath)
-
-        if file_idx is None:
-            raise RuntimeError(f"Could not extract file index from {filepath}")
-
-        with h5py.File(filepath, "r") as h5:
-            time = file_idx * nbstep_diag * dt
-
-            dset = h5["fdistribu"]
-            self.validate_distribution(dset.shape[1:], filepath)
-
-            f = dset[0, ...]
-
-            (
-                mass,
-                momentum_x,
-                momentum_y,
-                momentum_norm,
-                kinetic_energy,
-            ) = self.compute_distribution_moments(f)
-
-            potential_energy = 0.0
-
-            if "electrostatic_potential" in h5:
-                phi = h5["electrostatic_potential"][...]
-                potential_energy = self.compute_potential_energy(phi)
-
-        return {
-            "time": time,
-            "M": mass,
-            "Px": momentum_x,
-            "Py": momentum_y,
-            "P": momentum_norm,
-            "E_kin": kinetic_energy,
-            "E_pot": potential_energy,
-        }
 
 
 def parse_args():
@@ -142,16 +18,6 @@ def parse_args():
         help=(
             "Path to the compression_run_* directory to analyse. "
             "If omitted, the latest compression_run_* directory is used."
-        ),
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=4,
-        help=(
-            "Number of parallel workers used to process HDF5 files. "
-            "Use 1 for serial execution. A value between 2 and 4 is usually safe "
-            "on shared filesystems."
         ),
     )
 
@@ -175,36 +41,49 @@ def find_run_dir(requested_run_dir=None):
     return os.path.abspath(run_dirs[-1])
 
 
-def compute_file_diagnostics_worker(args):
-    filepath, x, y, vx, vy, dt, nbstep_diag = args
+def load_branch_diagnostics(branch_dir):
+    """Read diagnostics.csv produced by diagnostics.py and return arrays.
 
-    moments = Landau2X2VMoments(x, y, vx, vy)
+    The returned dict has keys matching the plot_analysis interface:
+    idx, time, M, Px, Py, P, E_kin, E_pot, E_tot.
 
-    idx = get_file_index(filepath)
+    Duplicate rows at restart boundaries are removed (keeping first occurrence).
+    """
+    csv_path = os.path.join(branch_dir, "diagnostics.csv")
 
-    if idx is None:
-        raise RuntimeError(f"Could not extract file index from {filepath}")
+    if not os.path.exists(csv_path):
+        raise RuntimeError(f"Diagnostics CSV not found: {csv_path}")
 
-    diagnostics = moments.compute_file_diagnostics(
-        filepath=filepath,
-        dt=dt,
-        nbstep_diag=nbstep_diag,
-    )
+    rows = {
+        "idx": [], "time": [],
+        "M": [], "Px": [], "Py": [], "P": [],
+        "E_kin": [], "E_pot": [], "E_tot": [],
+    }
+    seen_iters = set()
 
-    return idx, diagnostics
+    with open(csv_path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            it = int(row["iter"])
+            if it in seen_iters:
+                continue
+            seen_iters.add(it)
+            rows["idx"].append(it)
+            rows["time"].append(float(row["time"]))
+            rows["M"].append(float(row["mass"]))
+            rows["Px"].append(float(row["momentum_x"]))
+            rows["Py"].append(float(row["momentum_y"]))
+            rows["P"].append(float(row["momentum"]))
+            rows["E_kin"].append(float(row["ekin"]))
+            rows["E_pot"].append(float(row["epot"]))
+            rows["E_tot"].append(float(row["etot"]))
+
+    order = np.argsort(rows["idx"])
+    return {k: np.array(v)[order] for k, v in rows.items()}
 
 
-def get_file_index(filepath):
-    match = re.search(r"GYSELALIBXX_(\d+)\.h5", os.path.basename(filepath))
-
-    if match is None:
-        return None
-
-    return int(match.group(1))
-
-
-def load_benchmark_config(latest_run):
-    config_file = os.path.join(latest_run, "config_baseline.yaml")
+def load_benchmark_config(run_dir):
+    config_file = os.path.join(run_dir, "config_baseline.yaml")
 
     with open(config_file, "r") as f:
         config = yaml.safe_load(f)
@@ -227,25 +106,8 @@ def load_benchmark_config(latest_run):
     return iter_total, compression_period
 
 
-def assert_period_is_diagnostic_output(
-    iter_total,
-    compression_period,
-    nbstep_diag,
-):
-    if compression_period % nbstep_diag != 0:
-        raise RuntimeError(
-            f"Compression period must be a multiple of nbstep_diag={nbstep_diag}. "
-            f"Got compression_period={compression_period}."
-        )
-
-    if iter_total % nbstep_diag != 0:
-        raise RuntimeError(
-            f"Algorithm.nbiter must be a multiple of nbstep_diag={nbstep_diag}. " f"Got nbiter={iter_total}."
-        )
-
-
-def load_compression_events(latest_run):
-    manifest = os.path.join(latest_run, "compression_events.yaml")
+def load_compression_events(run_dir):
+    manifest = os.path.join(run_dir, "compression_events.yaml")
 
     if not os.path.exists(manifest):
         return []
@@ -253,130 +115,7 @@ def load_compression_events(latest_run):
     with open(manifest, "r") as f:
         data = yaml.safe_load(f) or {}
 
-    events = data.get("compression_events", [])
-
-    if events is None:
-        return []
-
-    return events
-
-
-def compute_moments_from_file(filepath, moments, dt, nbstep_diag):
-    return moments.compute_file_diagnostics(
-        filepath=filepath,
-        dt=dt,
-        nbstep_diag=nbstep_diag,
-    )
-
-
-def list_branch_h5_files(branch_dir):
-    files = []
-
-    for filepath in glob.glob(os.path.join(branch_dir, "GYSELALIBXX_*.h5")):
-        if "initstate" in filepath:
-            continue
-
-        idx = get_file_index(filepath)
-
-        if idx is None:
-            continue
-
-        files.append((idx, filepath))
-
-    return [filepath for _, filepath in sorted(files, key=lambda item: item[0])]
-
-
-def process_branch(
-    branch_dir,
-    moments,
-    dt,
-    nbstep_diag,
-    max_workers=None,
-):
-    if not os.path.exists(branch_dir):
-        return {}
-
-    files = list_branch_h5_files(branch_dir)
-
-    if not files:
-        return {}
-
-    if max_workers is None:
-        max_workers = min(4, os.cpu_count() or 1)
-
-    worker_args = [
-        (
-            filepath,
-            moments.x,
-            moments.y,
-            moments.vx,
-            moments.vy,
-            dt,
-            nbstep_diag,
-        )
-        for filepath in files
-    ]
-
-    data = {}
-
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(compute_file_diagnostics_worker, args)
-            for args in worker_args
-        ]
-
-        branch_label = os.path.basename(branch_dir)
-
-        with tqdm(
-            total=len(files),
-            desc=f"Processing {branch_label}",
-            unit="file",
-        ) as progress:
-            for future in as_completed(futures):
-                idx, diagnostics = future.result()
-                data[idx] = diagnostics
-                progress.update(1)
-
-    return data
-
-def build_timeline(sequence_tuples):
-    timeline = []
-
-    for data_dict, start_idx, end_idx in sequence_tuples:
-        valid_indices = sorted(idx for idx in data_dict.keys() if start_idx <= idx <= end_idx)
-
-        for idx in valid_indices:
-            step = data_dict[idx]
-
-            timeline.append(
-                {
-                    "idx": idx,
-                    "time": step["time"],
-                    "M": step["M"],
-                    "Px": step["Px"],
-                    "Py": step["Py"],
-                    "P": step["P"],
-                    "E_kin": step["E_kin"],
-                    "E_pot": step["E_pot"],
-                    "E_tot": step["E_kin"] + step["E_pot"],
-                }
-            )
-
-    timeline = sorted(timeline, key=lambda step: step["idx"])
-
-    keys = [
-        "idx",
-        "time",
-        "M",
-        "Px",
-        "Py",
-        "P",
-        "E_kin",
-        "E_pot",
-        "E_tot",
-    ]
-
-    return {key: np.array([step[key] for step in timeline]) for key in keys}
+    return data.get("compression_events") or []
 
 
 def assert_same_timeline(branches):
@@ -388,46 +127,10 @@ def assert_same_timeline(branches):
             raise RuntimeError(f"{name} has {len(data['idx'])} outputs, " f"but baseline has {len(reference_indices)}.")
 
         if not np.array_equal(data["idx"], reference_indices):
-            raise RuntimeError(f"{name} does not share the same diagnostic file indices as baseline.")
+            raise RuntimeError(f"{name} does not share the same diagnostic indices as baseline.")
 
         if not np.allclose(data["time"], reference_time):
             raise RuntimeError(f"{name} does not share the same time grid as baseline.")
-
-
-def load_mesh_and_time_info(latest_run):
-    init_file = os.path.join(
-        latest_run,
-        "branch_baseline",
-        "GYSELALIBXX_initstate.h5",
-    )
-
-    with h5py.File(init_file, "r") as h5:
-        x = h5["MeshX"][:]
-        y = h5["MeshY"][:]
-        vx = h5["MeshVx"][:]
-        vy = h5["MeshVy"][:]
-        nbstep_diag = int(h5["nbstep_diag"][()])
-
-    file0 = os.path.join(
-        latest_run,
-        "branch_baseline",
-        "GYSELALIBXX_00000.h5",
-    )
-    file1 = os.path.join(
-        latest_run,
-        "branch_baseline",
-        "GYSELALIBXX_00001.h5",
-    )
-
-    with h5py.File(file0, "r") as h5:
-        t0 = h5["time_saved"][()]
-
-    with h5py.File(file1, "r") as h5:
-        t1 = h5["time_saved"][()]
-
-    dt = (t1 - t0) / nbstep_diag
-
-    return x, y, vx, vy, dt, nbstep_diag
 
 
 def bytes_to_human(size_bytes):
@@ -467,14 +170,7 @@ def find_event_with_max_metric(compression_events, metric_name):
     return max(valid_events, key=lambda event: event_value(event, metric_name))
 
 
-def compute_compression_stats(latest_run, compression_events):
-    """
-    Display aggregate statistics over all compression events.
-
-    The launcher records per-event compression metrics in
-    compression_events.yaml. This function reports the worst reconstruction
-    errors across all compression/restart events.
-    """
+def compute_compression_stats(run_dir, compression_events):
     stats = []
 
     if not compression_events:
@@ -482,30 +178,11 @@ def compute_compression_stats(latest_run, compression_events):
 
     last_event = compression_events[-1]
 
-    worst_l2_event = find_event_with_max_metric(
-        compression_events,
-        "relative_l2_error",
-    )
-
-    worst_max_abs_event = find_event_with_max_metric(
-        compression_events,
-        "max_abs_error",
-    )
-
-    worst_mean_abs_event = find_event_with_max_metric(
-        compression_events,
-        "mean_abs_error",
-    )
-
-    worst_rmse_event = find_event_with_max_metric(
-        compression_events,
-        "rmse",
-    )
-
-    worst_ratio_event = find_event_with_max_metric(
-        compression_events,
-        "compression_ratio",
-    )
+    worst_l2_event = find_event_with_max_metric(compression_events, "relative_l2_error")
+    worst_max_abs_event = find_event_with_max_metric(compression_events, "max_abs_error")
+    worst_mean_abs_event = find_event_with_max_metric(compression_events, "mean_abs_error")
+    worst_rmse_event = find_event_with_max_metric(compression_events, "rmse")
+    worst_ratio_event = find_event_with_max_metric(compression_events, "compression_ratio")
 
     raw_restart_size = last_event.get("raw_restart_size")
     approx_restart_size = last_event.get("approx_restart_size")
@@ -535,11 +212,6 @@ def compute_compression_stats(latest_run, compression_events):
         approx_change = approx_restart_size - raw_restart_size
         approx_change_percent = 100.0 * approx_change / raw_restart_size
 
-    worst_l2_error = None if worst_l2_event is None else event_value(worst_l2_event, "relative_l2_error")
-    worst_max_abs_error = None if worst_max_abs_event is None else event_value(worst_max_abs_event, "max_abs_error")
-    worst_mean_abs_error = None if worst_mean_abs_event is None else event_value(worst_mean_abs_event, "mean_abs_error")
-    worst_rmse = None if worst_rmse_event is None else event_value(worst_rmse_event, "rmse")
-
     result = {
         "label": (f"{len(compression_events)} compression events, " f"last iter {int(last_event['iteration'])}"),
         "method_name": last_event.get("method_name", "unknown"),
@@ -553,11 +225,10 @@ def compute_compression_stats(latest_run, compression_events):
         "compressed_change_percent": compressed_change_percent,
         "approx_change": approx_change,
         "approx_change_percent": approx_change_percent,
-        # Worst-case reconstruction metrics over all compression events.
-        "relative_l2_error": worst_l2_error,
-        "max_abs_error": worst_max_abs_error,
-        "mean_abs_error": worst_mean_abs_error,
-        "rmse": worst_rmse,
+        "relative_l2_error": None if worst_l2_event is None else event_value(worst_l2_event, "relative_l2_error"),
+        "max_abs_error": None if worst_max_abs_event is None else event_value(worst_max_abs_event, "max_abs_error"),
+        "mean_abs_error": None if worst_mean_abs_event is None else event_value(worst_mean_abs_event, "mean_abs_error"),
+        "rmse": None if worst_rmse_event is None else event_value(worst_rmse_event, "rmse"),
         "worst_relative_l2_iteration": (None if worst_l2_event is None else int(worst_l2_event["iteration"])),
         "worst_relative_l2_file_index": (None if worst_l2_event is None else int(worst_l2_event["file_index"])),
         "worst_max_abs_iteration": (None if worst_max_abs_event is None else int(worst_max_abs_event["iteration"])),
@@ -616,7 +287,8 @@ def format_compression_stats(stats):
             )
         elif compressed_size is not None:
             lines.append(
-                f"  Raw restart:      unavailable    " f"Compressed payload: {bytes_to_human(compressed_size):>10}"
+                f"  Raw restart:      unavailable    "
+                f"Compressed payload: {bytes_to_human(compressed_size):>10}"
             )
         else:
             lines.append("  File sizes: unavailable")
@@ -701,10 +373,6 @@ def format_compression_stats(stats):
 
 
 def add_compression_markers(axs, compression_times):
-    """
-    Add small orange/yellow markers on the x axis of each graph.
-    Shows when the compression events occur.
-    """
     if not compression_times:
         return
 
@@ -763,10 +431,7 @@ def plot_combined_errors_vs_baseline(ax, branches):
         if branch_name == "Baseline":
             continue
 
-        errors = compute_relative_errors_vs_baseline(
-            branch=branch,
-            baseline=baseline,
-        )
+        errors = compute_relative_errors_vs_baseline(branch=branch, baseline=baseline)
 
         t = errors["time"]
 
@@ -869,13 +534,7 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
 
         mass_variation = np.abs(data["M"] - mass_0) / abs(mass_0)
 
-        main_axes[0].plot(
-            t[1:],
-            data["E_tot"][1:],
-            color=color,
-            linestyle=linestyle,
-            label=name,
-        )
+        main_axes[0].plot(t[1:], data["E_tot"][1:], color=color, linestyle=linestyle, label=name)
 
         main_axes[1].semilogy(
             t[1:],
@@ -915,10 +574,10 @@ def plot_analysis(branches, latest_run, compression_stats=None, compression_time
     add_compression_markers(all_plot_axes, compression_times)
 
     main_axes[0].set_ylabel(r"$\mathcal{E}_{tot}$")
-    main_axes[0].set_title(r"Total Energy: " r"$\mathcal{E}_{tot} = \mathcal{E}_{kin} + \mathcal{E}_{pot}$")
+    main_axes[0].set_title(r"Total Energy: $\mathcal{E}_{tot} = \mathcal{E}_{kin} + \mathcal{E}_{pot}$")
 
     main_axes[1].set_ylabel(r"$\mathcal{E}_{pot}$")
-    main_axes[1].set_title(r"Potential Energy: " r"$\mathcal{E}_{pot} = \frac{1}{2}\int |E|^2\,dx\,dy$")
+    main_axes[1].set_title(r"Potential Energy: $\mathcal{E}_{pot} = \frac{1}{2}\int |E|^2\,dx\,dy$")
 
     main_axes[2].set_ylabel(r"$|\Delta \mathcal{E}| / \mathcal{E}_0$")
     main_axes[2].set_title("Total Energy Variation")
@@ -945,71 +604,35 @@ def main():
     args = parse_args()
 
     try:
-        latest_run = find_run_dir(args.run_dir)
+        run_dir = find_run_dir(args.run_dir)
     except RuntimeError as exc:
         print(exc)
         return
 
-    print(f"Analysing data from: {latest_run}")
+    print(f"Analysing data from: {run_dir}")
 
-    x, y, vx, vy, dt, nbstep_diag = load_mesh_and_time_info(latest_run)
-    moments = Landau2X2VMoments(x, y, vx, vy)
+    iter_total, compression_period = load_benchmark_config(run_dir)
+    compression_events = load_compression_events(run_dir)
+    compression_stats = compute_compression_stats(run_dir, compression_events)
 
-    iter_total, compression_period = load_benchmark_config(latest_run)
-
-    assert_period_is_diagnostic_output(
-        iter_total,
-        compression_period,
-        nbstep_diag,
-    )
-
-    file_index_total = iter_total // nbstep_diag
-
-    compression_events = load_compression_events(latest_run)
-    compression_stats = compute_compression_stats(
-        latest_run,
-        compression_events,
-    )
-
-    print(f"Recovered dt              = {dt}")
-    print(f"Recovered nbstep_diag     = {nbstep_diag}")
-    print(f"Using compression_period  = {compression_period}")
-    print(f"Using iter_total          = {iter_total}")
     print(f"Compression events found  = {len(compression_events)}")
 
-    raw_baseline = process_branch(
-        branch_dir=os.path.join(latest_run, "branch_baseline"),
-        moments=moments,
-        dt=dt,
-        nbstep_diag=nbstep_diag,
-        max_workers=args.workers,
-    )
-    raw_compressed = process_branch(
-        branch_dir=os.path.join(latest_run, "branch_compressed"),
-        moments=moments,
-        dt=dt,
-        nbstep_diag=nbstep_diag,
-        max_workers=args.workers,
-    )
+    baseline_data = load_branch_diagnostics(os.path.join(run_dir, "branch_baseline"))
+    compressed_data = load_branch_diagnostics(os.path.join(run_dir, "branch_compressed"))
 
     branches = {
-        "Baseline": build_timeline(
-            [
-                (raw_baseline, 0, file_index_total),
-            ]
-        ),
-        "Compressed": build_timeline(
-            [
-                (raw_compressed, 0, file_index_total),
-            ]
-        ),
+        "Baseline": baseline_data,
+        "Compressed": compressed_data,
     }
 
+    # Derive dt from the baseline CSV time column for compression event markers.
+    baseline_time = baseline_data["time"]
+    dt = float(baseline_time[1] - baseline_time[0]) if len(baseline_time) >= 2 else 0.0
     compression_times = [int(event["iteration"]) * dt for event in compression_events]
 
     plot_analysis(
         branches=branches,
-        latest_run=latest_run,
+        latest_run=run_dir,
         compression_stats=compression_stats,
         compression_times=compression_times,
     )

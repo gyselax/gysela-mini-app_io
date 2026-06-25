@@ -311,6 +311,7 @@ int main(int argc, char **argv) {
 
   IdxRangeSpXYVxVy idxrange_spxyvxvy_v2Dsplit(idxrange_spvxvyxy_v2Dsplit);
   PDI_expose_idx_range(idxrange_spxyvxvy_v2Dsplit, "local_fdistribu");
+  PDI_expose_idx_range(idxrange_glob_spxyvxvy, "global_fdistribu");
 
   if (nb_restart == 0) {
     init_case(idx_range_kinsp, configs, transpose, allfequilibrium,
@@ -344,9 +345,8 @@ int main(int argc, char **argv) {
       static_cast<int>(PCpp_int(configs.conf_gyselax, ".Algorithm.nbiter"));
 
   // --> Output info
-  double const time_diag =
-      PCpp_double(configs.conf_gyselax, ".Output.time_diag");
-  int const nbstep_diag = int(time_diag / deltat);
+  int const nbstep_diag =
+      static_cast<int>(PCpp_int(configs.conf_gyselax, ".Output.nbiter_diag"));
 
   // Create spline evaluator
   ddc::PeriodicExtrapolationRule<X> bv_x_min;
@@ -429,11 +429,16 @@ int main(int argc, char **argv) {
     ddc::PdiEvent("initial_state").with("fdistribu_eq", allfequilibrium_host);
   }
 
+  ddc::PdiEvent("Init");
+  ddc::PdiEvent("InitBridge");
+
   steady_clock::time_point const start = steady_clock::now();
 
   predcorr(get_field(allfdistribu_v2D_split), deltat, nbiter);
 
   steady_clock::time_point const end = steady_clock::now();
+
+  ddc::PdiEvent("EndSimulation").with("iter", nbiter);
 
   double const simulation_time =
       std::chrono::duration<double>(end - start).count();

@@ -1,5 +1,5 @@
 metadata:
-  fdistribu_filename_size:  size_t 
+  fdistribu_filename_size:  size_t
   fdistribu_filename: { type: array, subtype: char, size: "$fdistribu_filename_size" }
   Nx_spline_cells : int
   Ny_spline_cells : int
@@ -49,9 +49,13 @@ metadata:
     subtype: double
     size: [ '$fdistribu_eq_extents[0]', '$fdistribu_eq_extents[1]', '$fdistribu_eq_extents[2]' ]
 
-  #-- Parallel data
+  #-- Parallel data (local chunk)
   local_fdistribu_starts: { type: array, subtype: size_t, size: 5 }
   local_fdistribu_extents: { type: array, subtype: size_t, size: 5 }
+
+  #-- Global fdistribu shape (for bridge metadata — distinct from 'fdistribu' data element)
+  global_fdistribu_starts: { type: array, subtype: size_t, size: 5 }
+  global_fdistribu_extents: { type: array, subtype: size_t, size: 5 }
 
 
 data:
@@ -67,6 +71,93 @@ data:
 
 plugins:
   mpi:
+  pycall:
+    on_event:
+      Init:
+        with: {}
+        exec: |
+          import numpy as np
+          from mpi4py import MPI
+          from deisa.dask import Bridge
+          comm = MPI.COMM_WORLD
+      InitBridge:
+        with: { global_fdistribu_extents: $global_fdistribu_extents,
+                local_fdistribu_extents: $local_fdistribu_extents,
+                local_fdistribu_starts: $local_fdistribu_starts,
+                MeshX_extents: $MeshX_extents,
+                MeshY_extents: $MeshY_extents,
+                MeshVx_extents: $MeshVx_extents,
+                MeshVy_extents: $MeshVy_extents
+              }
+        exec: |
+          Nx  = int(MeshX_extents[0])
+          Ny  = int(MeshY_extents[0])
+          Nvx = int(MeshVx_extents[0])
+          Nvy = int(MeshVy_extents[0])
+          global_shape = tuple(int(x) for x in global_fdistribu_extents)
+          local_shape  = tuple(int(x) for x in local_fdistribu_extents)
+          chunk_pos    = tuple((local_fdistribu_starts // local_fdistribu_extents).astype(int).tolist())
+          arrays_metadata = {
+              'fdistribu': {
+                  'global_shape':   global_shape,
+                  'chunk_shape':    local_shape,
+                  'chunk_position': chunk_pos,
+              },
+              'absolute_time': {
+                  'global_shape':   (1,),
+                  'chunk_shape':    (1,),
+                  'chunk_position': (0,),
+              },
+              'MeshX':  {'global_shape': (Nx,),  'chunk_shape': (Nx,),  'chunk_position': (0,)},
+              'MeshY':  {'global_shape': (Ny,),  'chunk_shape': (Ny,),  'chunk_position': (0,)},
+              'MeshVx': {'global_shape': (Nvx,), 'chunk_shape': (Nvx,), 'chunk_position': (0,)},
+              'MeshVy': {'global_shape': (Nvy,), 'chunk_shape': (Nvy,), 'chunk_position': (0,)},
+          }
+          bridge = Bridge(comm, arrays_metadata)
+      iteration:
+        with:
+          fdistribu: $fdistribu
+          it: $iter
+          t: $absolute_time
+          iter_offset: $iter_offset
+          nbstep_diag: $nbstep_diag
+          MeshX: $MeshX
+          MeshY: $MeshY
+          MeshVx: $MeshVx
+          MeshVy: $MeshVy
+        exec: |
+          timestep = int(it) + int(iter_offset)
+          if timestep % int(nbstep_diag) == 0:
+            bridge.send("fdistribu", fdistribu, timestep)
+            bridge.send("absolute_time", np.array([float(t)]), timestep)
+            bridge.send("MeshX",  np.array(MeshX),  timestep)
+            bridge.send("MeshY",  np.array(MeshY),  timestep)
+            bridge.send("MeshVx", np.array(MeshVx), timestep)
+            bridge.send("MeshVy", np.array(MeshVy), timestep)
+      last_iteration:
+        with:
+          fdistribu: $fdistribu
+          it: $iter
+          t: $absolute_time
+          iter_offset: $iter_offset
+          MeshX: $MeshX
+          MeshY: $MeshY
+          MeshVx: $MeshVx
+          MeshVy: $MeshVy
+        exec: |
+          timestep = int(it) + int(iter_offset)
+          bridge.send("fdistribu", fdistribu, timestep)
+          bridge.send("absolute_time", np.array([float(t)]), timestep)
+          bridge.send("MeshX",  np.array(MeshX),  timestep)
+          bridge.send("MeshY",  np.array(MeshY),  timestep)
+          bridge.send("MeshVx", np.array(MeshVx), timestep)
+          bridge.send("MeshVy", np.array(MeshVy), timestep)
+      EndSimulation:
+        with:
+          it: $iter
+          iter_offset: $iter_offset
+        exec: |
+          bridge.close(int(it) + int(iter_offset))
   set_value:
     on_init:
       - share:
@@ -76,7 +167,7 @@ plugins:
       iter:
         - set:
           # Shift file number in order not to change predcorr_implementation
-          - iter_saved: '(${iter} + ${iter_offset}) / ${nbstep_diag}'
+          - iter_saved: '${iter} + ${iter_offset}'
           - absolute_time: '(${iter} + ${iter_offset}) * ${deltat}'
     on_finalize:
       - release: [iter_saved, absolute_time]
@@ -100,8 +191,7 @@ plugins:
       write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
     - file: 'GYSELALIBXX_${iter_saved:05}.h5'
       communicator: $MPI_COMM_WORLD
-      on_event: [iteration, last_iteration]
-      when: '${iter} % ${nbstep_diag} = 0'
+      on_event: [last_iteration]
       collision_policy: replace_and_warn
       datasets:
         fdistribu:

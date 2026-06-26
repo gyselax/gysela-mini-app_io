@@ -495,6 +495,12 @@ int main(int argc, char **argv) {
     cout << "Initialising 5D particle distribution function." << endl;
   }
   PDI_init(configs.conf_pdi);
+
+  //---------------------------------------------------------
+  // Exposing MPI rank for `file per process` I/O strategy
+  //---------------------------------------------------------
+  PDI_expose("mpi_rank", &rank, PDI_OUT);
+
   //---------------------------------------------------------
   // Import Python packages
   //---------------------------------------------------------

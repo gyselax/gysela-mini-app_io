@@ -1,0 +1,463 @@
+benchmark:
+  name: "Gys_io Benchmark - ISO Condition FPP"
+  workdir: "./"
+  repetitions: 1
+  search_method: "exhaustive"
+  executor: "local"
+  cache_file: "./iops_gys.db"
+  cache_exclude_vars: ["gys_io_output"]
+  
+vars:
+  nodes: 
+    type: int
+    sweep:
+      mode: list
+      values: [8]
+
+  tasks_per_nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [4]  
+  
+  file_strategy:
+    type: str
+    sweep:
+      mode: list
+      values: ["fpp", "subfiling", "ssf"] #Actual possible values : ssf, subfiling, fpp
+  
+  subfile_number:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2]
+    when: "file_strategy == 'subfiling'"
+    default: 0
+
+  subfile_stripe_size_bytes:
+    type: int
+    sweep:
+      mode: list        
+      values: [536870912] #512MB
+    when: "file_strategy == 'subfiling'"
+    default: 0
+    
+  ost_count:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 4, 8]
+      
+  pfs_path:
+    type: str
+    sweep: 
+      mode: list
+      values: ["{{ os_env.GYS_IO_OUTPUT_PATH}}/ost_{{ost_count}}"]
+    when: "ost_count != 0"
+    default: "{{ os_env.GYS_IO_OUTPUT_PATH }}"
+  
+  
+  gys_io_output:
+    type: str
+    expr: "{{ execution_dir }}/summary.txt"
+
+  grid_index:
+    type: int
+    sweep:
+      mode: list
+      values: [0, 1]
+      
+  tor1_any_cells:
+    type: int
+    expr: "{{[15, 125][grid_index]}}"
+
+  tor2_any_cells:
+    type: int
+    expr: "{{[32, 128][grid_index]}}"
+
+  tor3_any_cells:
+    type: int
+    expr: "{{[32, 64][grid_index]}}"
+
+  vpar_any_cells:
+    type: int
+    expr: "{{[15, 63][grid_index]}}"
+
+  mu_any_cells:
+    type: int
+    expr: "{{[9, 63][grid_index]}}"
+
+command:
+  template: "gys_io {{ inputs.gys_io_config.path }} {{ inputs.pdi_config.path }}"
+
+scripts:
+  - name: "gys_io PHDF5 benchmark"
+    inputs:
+      - name: "gys_io_config"
+        path: "{{ execution_dir }}/gys_io.yaml"
+        template: |
+          FileNames:
+            gysela_io_filename:  plasma1.h5
+
+          SplineMesh:
+            Tor1_ncells: {{ tor1_any_cells }}    # number of points in the radial direction
+            Tor2_ncells: {{ tor2_any_cells }}    # number of points in the poloidal direction
+            Tor3_ncells: {{ tor3_any_cells }}    # number of points in the poloidal direction
+            Vpar_ncells: {{ vpar_any_cells }}    # number of points in the parallel velocity direction
+            Mu_ncells:   {{ mu_any_cells }}      # number of points in the adiabatic invariant direction
+
+            Tor1_min: 0.0
+            Tor1_max: 1.0
+            Tor2_min: 0.0
+            Tor2_max: 6.283185307179586476925286766559005768394
+            Tor3_min: 0.0
+            Tor3_max: 6.283185307179586476925286766559005768394
+            Vpar_min: -7.0
+            Vpar_max: 7.0
+            Mu_min: 0.0
+            Mu_max: 12.0
+
+          SpeciesInfo:
+            - name: 'electron'
+              charge: -1.
+              mass: 0.0005
+              N_maxw: 1.0          # initial constant density
+              T_maxw: 1.0          # initial constant temperature
+              Upar_maxw: 0.0     # initial mean velocity
+            - name: 'ion'
+              charge: 1.
+              mass: 1.
+              N_maxw: 1.0         # initial constant density
+              T_maxw: 1.0         # initial constant temperature 
+              Upar_maxw: 3.0    # initial mean velocity
+
+          Application: 
+            version: "mpi_transpose"  # "mpi_transpose"/"in-situ-diagnostic"
+      
+      
+      - name: "pdi_config"
+        path: "{{ execution_dir }}/pdi_config.yaml"
+        template: |
+          # -- Current I/O Strategy started : {{ file_strategy }} -- #
+          types:
+            tor1_double: &tor1_double
+              type: array
+              subtype: double
+              size: &tor1_size [ '$tor1_extents[0]' ]
+
+            tor2_double: &tor2_double
+              type: array
+              subtype: double
+              size: &tor2_size [ '$tor2_extents[0]' ]
+
+            tor3_double: &tor3_double
+              type: array
+              subtype: double
+              size: &tor3_size [ '$tor3_extents[0]' ]
+
+            vpar_double: &vpar_double
+              type: array
+              subtype: double
+              size: &vpar_size [ '$vpar_extents[0]' ]
+
+            mu_double: &mu_double
+              type: array
+              subtype: double
+              size: &mu_size [ '$mu_extents[0]' ]
+
+          metadata:
+            {% if file_strategy == "fpp" %}
+            mpi_rank: int
+            {% endif %}
+            gysela_io_filename_size: size_t
+            gysela_io_filename: {type: array, subtype: char, size: "$gysela_io_filename_size"}
+
+            #-- Parallel data
+            local_fdistribu_starts: { type: array, subtype: size_t, size: 6 }
+            local_fdistribu_extents: { type: array, subtype: size_t, size: 6 }
+
+            #-- Species info
+            species:
+              type: array
+              subtype: int
+              size: [ '$species_extents[0]' ]
+            masses:
+              type: array
+              subtype: double
+              size: [ '$masses_extents[0]' ]
+            charges:
+              type: array
+              subtype: double
+              size: [ '$charges_extents[0]' ]
+            species_extents: { type: array, subtype: size_t, size: 1 }
+            masses_extents: { type: array, subtype: size_t, size: 1 }
+            charges_extents: { type: array, subtype: size_t, size: 1 }
+
+            #-- Mesh: breakpoints and grid
+            breakpoints_tor1_extents: { type: array, subtype: size_t, size: 1 }
+            breakpoints_tor2_extents: { type: array, subtype: size_t, size: 1 }
+            breakpoints_tor3_extents: { type: array, subtype: size_t, size: 1 }
+            breakpoints_vpar_extents: { type: array, subtype: size_t, size: 1 }
+            breakpoints_mu_extents: { type: array, subtype: size_t, size: 1 }
+            tor1_extents: { type: array, subtype: size_t, size: 1 }
+            tor2_extents: { type: array, subtype: size_t, size: 1 }
+            tor3_extents: { type: array, subtype: size_t, size: 1 }
+            vpar_extents: { type: array, subtype: size_t, size: 1 }
+            mu_extents: { type: array, subtype: size_t, size: 1 }
+            breakpoints_tor1:
+              type: array
+              subtype: double
+              size: [ '$breakpoints_tor1_extents[0]' ]
+            breakpoints_tor2:
+              type: array
+              subtype: double
+              size: [ '$breakpoints_tor2_extents[0]' ]
+            breakpoints_tor3:
+              type: array
+              subtype: double
+              size: [ '$breakpoints_tor3_extents[0]' ]
+            breakpoints_vpar:
+              type: array
+              subtype: double
+              size: [ '$breakpoints_vpar_extents[0]' ]
+            breakpoints_mu:
+              type: array
+              subtype: double
+              size: [ '$breakpoints_mu_extents[0]' ]
+            tor1: tor1_double
+            tor2: tor2_double
+            tor3: tor3_double
+            vpar: vpar_double
+            mu: mu_double
+
+            # -- Timing statistics
+            timing_names_count: size_t
+            timing_names_strlen: size_t
+            timing_names: { type: array, subtype: char, size: [ '$timing_names_count', '$timing_names_strlen' ] }
+            timing_values_size: size_t
+            timing_values: { type: array, subtype: double, size: [ '$timing_values_size' ] }
+
+            #-- Fluid moments extents
+            density_extents: { type: array, subtype: size_t, size: 4 }
+            mean_velocity_extents: { type: array, subtype: size_t, size: 4 }
+            temperature_extents: { type: array, subtype: size_t, size: 4 }
+
+          data:
+            #-- Distribution function
+            fdistribu_sptor3Dv2D:
+              type: array
+              subtype: double
+              size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
+
+            #-- Fluid moments (4D: species × tor1 × tor2 × tor3)
+            density:
+              type: array
+              subtype: double
+              size: [ '$density_extents[0]', '$density_extents[1]', '$density_extents[2]', '$density_extents[3]' ]
+            mean_velocity:
+              type: array
+              subtype: double
+              size: [ '$mean_velocity_extents[0]', '$mean_velocity_extents[1]', '$mean_velocity_extents[2]', '$mean_velocity_extents[3]' ]
+            temperature:
+              type: array
+              subtype: double
+              size: [ '$temperature_extents[0]', '$temperature_extents[1]', '$temperature_extents[2]', '$temperature_extents[3]' ]
+
+          plugins:
+            mpi:
+            decl_hdf5:
+              #-- Read file names and expose them to PDI
+              - file: '${gysela_io_filename}'
+                on_event: [ReadFileNames]
+                read:
+                  gysela_io_filename_size: ~
+                  gysela_io_filename: ~
+
+              #-- Read species info
+              - file: '${gysela_io_filename}'
+                on_event: [read_species]
+                read:
+                  species: ~
+                  masses: ~
+                  charges: ~
+
+              #-- Read mesh
+              - file: '${gysela_io_filename}'
+                on_event: [read_tor1_extents]
+                read:
+                  breakpoints_tor1_extents: {size_of: breakpoints_tor1}
+                  tor1_extents: {size_of: tor1}
+              - file: '${gysela_io_filename}'
+                on_event: [read_tor1]
+                read:
+                  breakpoints_tor1: ~
+                  tor1: ~
+              - file: '${gysela_io_filename}'
+                on_event: [read_tor2_extents]
+                read:
+                  breakpoints_tor2_extents: {size_of: breakpoints_tor2}
+                  tor2_extents: {size_of: tor2}
+              - file: '${gysela_io_filename}'
+                on_event: [read_tor2]
+                read:
+                  breakpoints_tor2: ~
+                  tor2: ~
+              - file: '${gysela_io_filename}'
+                on_event: [read_tor3_extents]
+                read:
+                  breakpoints_tor3_extents: {size_of: breakpoints_tor3}
+                  tor3_extents: {size_of: tor3}
+              - file: '${gysela_io_filename}'
+                on_event: [read_tor3]
+                read:
+                  breakpoints_tor3: ~
+                  tor3: ~
+              - file: '${gysela_io_filename}'
+                on_event: [read_vpar_extents]
+                read:
+                  breakpoints_vpar_extents: {size_of: breakpoints_vpar}
+                  vpar_extents: {size_of: vpar}
+              - file: '${gysela_io_filename}'
+                on_event: [read_vpar]
+                read:
+                  breakpoints_vpar: ~
+                  vpar: ~
+              - file: '${gysela_io_filename}'
+                on_event: [read_mu_extents]
+                read:
+                  breakpoints_mu_extents: {size_of: breakpoints_mu}
+                  mu_extents: {size_of: mu}
+              - file: '${gysela_io_filename}'
+                on_event: [read_mu]
+                read:
+                  breakpoints_mu: ~
+                  mu: ~
+
+              #-- Read distribution function
+              - file: '${gysela_io_filename}'
+                on_event: [read_fdistribu]
+                read:
+                  fdistribu_sptor3Dv2D:
+                      dataset_selection:
+                        size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
+                        start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]
+
+              #-- Write timing (as table: names and values arrays)
+              - file: '{{ pfs_path }}/cpu_time.h5'
+                on_event: [write_timing]
+                collision_policy: replace_and_warn
+                write:
+                  timing_names: ~
+                  timing_values: ~
+
+              #-- Write distribution function and coordinates
+              - file: '{{ pfs_path }}/fdistribu_5D_output{% if file_strategy == "fpp"%}_${mpi_rank}{% endif %}.h5'
+                on_event: [write_fdistribu]
+                collision_policy: replace_and_warn
+                
+                {% if file_strategy != "fpp" %}
+                communicator: $MPI_COMM_WORLD
+                {% endif %}
+                
+                {% if file_strategy == "subfiling" %}
+                subfiling: {{ subfile_number }}
+                {% endif %}
+
+                datasets:
+                  fdistribu_sptor3Dv2D:
+                    type: array
+                    subtype: double
+                    {% if file_strategy != 'fpp' %}
+                    size: ['$species_extents[0]', '$tor1_extents[0]', '$tor2_extents[0]', '$tor3_extents[0]', '$vpar_extents[0]', '$mu_extents[0]']
+                    {% endif %}
+                    {% if file_strategy == 'fpp' %}
+                    size:  ['$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]']
+                    {% endif %}
+                write:
+                  {% if file_strategy != "fpp" %}
+                  tor1: ~
+                  tor2: ~
+                  tor3: ~
+                  vpar: ~
+                  mu: ~
+                 
+                  fdistribu_sptor3Dv2D:
+                      dataset_selection:
+                        size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]
+                        start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]
+                  {% endif %}
+                  {% if file_strategy == "fpp" %}
+                  fdistribu_sptor3Dv2D: ~
+                  {% endif %}
+              #-- Write fluid moment
+              - file: '{{ pfs_path }}/fluid_moments.h5'
+                on_event: [write_fluid_moments]
+                collision_policy: replace_and_warn
+                write:
+                  density: ~
+                  mean_velocity: ~
+                  temperature: ~
+          trace: ~
+
+
+    script_template: |
+      mpirun {% if file_strategy == "subfiling" %} -x H5FD_SUBFILING_STRIPE_SIZE={{ subfile_stripe_size_bytes }} {% endif %}{{ command.template }} >> {{ execution_dir }}/gys_io.out >&1
+      
+    parser:
+      file: "{{ execution_dir }}/gys_io.out"
+      metrics:
+        - name: time_write
+          type: float
+        - name: time_total
+          type: float
+      parser_script: |
+        import json
+        import os
+
+        def parse(file_path):
+          with open(file_path, "r") as f:
+              lines = f.readlines()
+              time_write = None
+              time_total = None
+              for line in lines:
+                if "Time write:" in line:
+                  # Extract the time_write value from the line and retrieve the letter 's'
+                  time_write = float(line.split("Time write:")[1].strip().rstrip('s'))
+                elif "Time total:" in line:
+                  # Extract the time_total value from the line and retrieve the letter 's'
+                  time_total = float(line.split("Time total:")[1].strip().rstrip('s'))
+
+          return {
+            "time_write": time_write,
+            "time_total": time_total,
+          }
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results_gys_io.csv"
+
+          
+machines:
+  plafrim:
+    benchmark:
+      repetitions: 3
+      executor: "slurm"
+    scripts:
+      - name: "gys_io PHDF5 benchmark"
+        script_template: |
+          #!/bin/bash
+          #SBATCH --job-name=gys_io
+          #SBATCH --nodes={{ nodes  }}
+          #SBATCH --ntasks-per-node={{ tasks_per_nodes }}
+          #SBATCH --time=00:30:00
+          #SBATCH --exclusive
+          #SBATCH --constraint='bora'
+          #SBATCH --exclude=bora042,bora023,bora019
+
+          set -e
+          set -o pipefail
+           
+          ~/env_sub.sh
+          ~/clean_ost.sh
+
+          mpirun {% if file_strategy == "subfiling" %} -x H5FD_SUBFILING_STRIPE_SIZE={{ subfile_stripe_size_bytes }} {% endif %}{{ command.template }} >> {{ execution_dir }}/gys_io.out >&1

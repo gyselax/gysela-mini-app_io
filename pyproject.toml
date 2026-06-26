@@ -19,6 +19,9 @@ dependencies = [
     "h5netcdf",
     "netcdf4",
     "tqdm",
+    "iops-benchmark",
+    "iops-benchmark[bayesian]",
+    "rich"
 ]
 
 [project.optional-dependencies]

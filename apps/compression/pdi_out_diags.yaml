@@ -83,17 +83,9 @@ plugins:
       InitBridge:
         with: { global_fdistribu_extents: $global_fdistribu_extents,
                 local_fdistribu_extents: $local_fdistribu_extents,
-                local_fdistribu_starts: $local_fdistribu_starts,
-                MeshX_extents: $MeshX_extents,
-                MeshY_extents: $MeshY_extents,
-                MeshVx_extents: $MeshVx_extents,
-                MeshVy_extents: $MeshVy_extents
+                local_fdistribu_starts: $local_fdistribu_starts
               }
         exec: |
-          Nx  = int(MeshX_extents[0])
-          Ny  = int(MeshY_extents[0])
-          Nvx = int(MeshVx_extents[0])
-          Nvy = int(MeshVy_extents[0])
           global_shape = tuple(int(x) for x in global_fdistribu_extents)
           local_shape  = tuple(int(x) for x in local_fdistribu_extents)
           chunk_pos    = tuple((local_fdistribu_starts // local_fdistribu_extents).astype(int).tolist())
@@ -108,10 +100,6 @@ plugins:
                   'chunk_shape':    (1,),
                   'chunk_position': (0,),
               },
-              'MeshX':  {'global_shape': (Nx,),  'chunk_shape': (Nx,),  'chunk_position': (0,)},
-              'MeshY':  {'global_shape': (Ny,),  'chunk_shape': (Ny,),  'chunk_position': (0,)},
-              'MeshVx': {'global_shape': (Nvx,), 'chunk_shape': (Nvx,), 'chunk_position': (0,)},
-              'MeshVy': {'global_shape': (Nvy,), 'chunk_shape': (Nvy,), 'chunk_position': (0,)},
           }
           bridge = Bridge(comm, arrays_metadata)
       iteration:
@@ -128,12 +116,20 @@ plugins:
         exec: |
           timestep = int(it) + int(iter_offset)
           if timestep % int(nbstep_diag) == 0:
+            # ===== will no longer be needed once xarrays can be sent through the bridge ======
+            if comm.Get_rank() == 0:
+              client = bridge.client
+              client.publish_dataset(coords={
+                'MeshX':  np.array(MeshX),
+                'MeshY':  np.array(MeshY),
+                'MeshVx': np.array(MeshVx),
+                'MeshVy': np.array(MeshVy),
+                'iter': timestep,
+              }, override=True)
+            comm.Barrier()
+            # =================================================================================
             bridge.send("fdistribu", fdistribu, timestep)
             bridge.send("absolute_time", np.array([float(t)]), timestep)
-            bridge.send("MeshX",  np.array(MeshX),  timestep)
-            bridge.send("MeshY",  np.array(MeshY),  timestep)
-            bridge.send("MeshVx", np.array(MeshVx), timestep)
-            bridge.send("MeshVy", np.array(MeshVy), timestep)
       last_iteration:
         with:
           fdistribu: $fdistribu
@@ -146,12 +142,20 @@ plugins:
           MeshVy: $MeshVy
         exec: |
           timestep = int(it) + int(iter_offset)
+          # ===== will no longer be needed once xarrays can be sent through the bridge ======
+          if comm.Get_rank() == 0:
+            client = bridge.client
+            client.publish_dataset(coords={
+              'MeshX':  np.array(MeshX),
+              'MeshY':  np.array(MeshY),
+              'MeshVx': np.array(MeshVx),
+              'MeshVy': np.array(MeshVy),
+              'iter': timestep,
+            }, override=True)
+          comm.Barrier()
+          # =================================================================================
           bridge.send("fdistribu", fdistribu, timestep)
           bridge.send("absolute_time", np.array([float(t)]), timestep)
-          bridge.send("MeshX",  np.array(MeshX),  timestep)
-          bridge.send("MeshY",  np.array(MeshY),  timestep)
-          bridge.send("MeshVx", np.array(MeshVx), timestep)
-          bridge.send("MeshVy", np.array(MeshVy), timestep)
       EndSimulation:
         with:
           it: $iter

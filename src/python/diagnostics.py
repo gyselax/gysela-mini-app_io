@@ -7,6 +7,7 @@ from pathlib import Path
 import dask.array as da
 import numpy as np
 from deisa.dask import Deisa
+from distributed import get_client
 
 _MEASURE_CFG = None
 
@@ -191,22 +192,19 @@ def measure(cfg, f, Efield, it, t_actual):
 deisa = Deisa()
 
 
-@deisa.register("MeshX", "MeshY", "MeshVx", "MeshVy")
-def init_config(mx_chunks, my_chunks, mvx_chunks, mvy_chunks, data_dir="."):
-    """Initialize the measure config from mesh coordinates on the first call."""
-    if _MEASURE_CFG is not None:
-        return
-    init_measure_config(
-        x  = np.array(mx_chunks[0]),
-        y  = np.array(my_chunks[0]),
-        vx = np.array(mvx_chunks[0]),
-        vy = np.array(mvy_chunks[0]),
-        data_dir=data_dir,
-    )
+@deisa.register("fdistribu", "absolute_time")
+def compute_diagnostics(fdistribu_chunks, time_chunks):
+    client = get_client()
+    coords = client.gather(client.get_dataset("coords"))
 
+    if _MEASURE_CFG is None:
+        init_measure_config(
+            x  = np.array(coords['MeshX']),
+            y  = np.array(coords['MeshY']),
+            vx = np.array(coords['MeshVx']),
+            vy = np.array(coords['MeshVy']),
+        )
 
-@deisa.register("fdistribu", "absolute_time", "MeshX", "MeshY", "MeshVx", "MeshVy")
-def compute_diagnostics(fdistribu_chunks, time_chunks, mx_chunks, my_chunks, mvx_chunks, mvy_chunks):
     fdistribu = np.array(fdistribu_chunks[0])  # (Nsp, Nx, Ny, Nvx, Nvy)
     t_actual  = float(np.array(time_chunks[0])[0])
     timestep  = int(fdistribu_chunks[0].t)

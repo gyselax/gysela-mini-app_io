@@ -587,7 +587,7 @@ def main():
 
     print(f"Master directory initialised: {run_dir}")
 
-    run_pdi_yaml = os.path.join(run_dir, "pdi_out.yaml")
+    run_pdi_yaml = os.path.join(run_dir, "pdi_out_diags.yaml")
     shutil.copy2(SOURCE_PDI_YAML, run_pdi_yaml)
 
     with open(SOURCE_GYSELA_YAML, "r") as f:

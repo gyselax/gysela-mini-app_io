@@ -5,7 +5,7 @@
 extern "C" {
 void fluidmoments_mem_copy(void)
 {
-    using View6D = Kokkos::View<double******, Kokkos::DefaultExecutionSpace>;
+    using View6D = Kokkos::View<double******, Kokkos::HostSpace>;
     using UnmanagedView6D = Kokkos::View<double******, Kokkos::DefaultExecutionSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
     
     size_t* extents;

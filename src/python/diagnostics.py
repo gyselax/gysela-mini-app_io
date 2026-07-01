@@ -206,7 +206,7 @@ def compute_diagnostics(fdistribu_chunks, time_chunks):
         )
 
     fdistribu = np.array(fdistribu_chunks[0])  # (Nsp, Nx, Ny, Nvx, Nvy)
-    t_actual  = float(np.array(time_chunks[0])[0])
+    t_actual  = float(np.array(coords['absolute_time'])[0])
     timestep  = int(fdistribu_chunks[0].t)
 
     cfg = get_measure_config()

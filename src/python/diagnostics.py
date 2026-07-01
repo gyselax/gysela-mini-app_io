@@ -192,8 +192,8 @@ def measure(cfg, f, Efield, it, t_actual):
 deisa = Deisa()
 
 
-@deisa.register("fdistribu", "absolute_time")
-def compute_diagnostics(fdistribu_chunks, time_chunks):
+@deisa.register("fdistribu")
+def compute_diagnostics(fdistribu_chunks):
     client = get_client()
     coords = client.gather(client.get_dataset("coords"))
 

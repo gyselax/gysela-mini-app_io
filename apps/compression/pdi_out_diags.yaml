@@ -120,11 +120,11 @@ plugins:
                 'MeshVx': np.array(MeshVx),
                 'MeshVy': np.array(MeshVy),
                 'iter': timestep,
+                'absolute_time': np.array([float(t)]),
               }, override=True)
             comm.Barrier()
             # =================================================================================
             bridge.send("fdistribu", fdistribu, timestep)
-            bridge.send("absolute_time", np.array([float(t)]), timestep)
       last_iteration:
         with:
           fdistribu: $fdistribu

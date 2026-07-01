@@ -95,11 +95,6 @@ plugins:
                   'chunk_shape':    local_shape,
                   'chunk_position': chunk_pos,
               },
-              'absolute_time': {
-                  'global_shape':   (1,),
-                  'chunk_shape':    (1,),
-                  'chunk_position': (0,),
-              },
           }
           bridge = Bridge(comm, arrays_metadata)
       iteration:

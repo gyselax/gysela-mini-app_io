@@ -14,6 +14,7 @@ import yaml
 # Compression params / names
 # ------------------------------------------------------------------
 from compression_methods.PCA import PCACompressor
+from evaluate_compression import plot_diags
 
 COMPRESSOR_CLASS = PCACompressor
 COMPRESSOR_PARAMS = {
@@ -573,6 +574,21 @@ def run_periodic_compressed_branch(
     return dir_compressed
 
 
+def compare_results(run_dir):
+    diag_files = []
+    for entry in sorted(os.listdir(run_dir)):
+        csv_path = os.path.join(run_dir, entry, "diagnostics.csv")
+        if os.path.exists(csv_path):
+            diag_files.append(csv_path)
+
+    if not diag_files:
+        print("\nNo diagnostics.csv files found — skipping comparison plot.")
+        return
+
+    output = os.path.join(run_dir, "diags_comparison.png")
+    plot_diags(diag_files, output=output)
+
+
 def main():
     args = parse_args()
 
@@ -630,8 +646,14 @@ def main():
     if not args.keep_pdi_copy:
         remove_file_if_exists(run_pdi_yaml, "copied PDI config")
 
+    
+
     print(f"\nWorkflow complete. All files are in: {run_dir}")
+    return run_dir
 
 
 if __name__ == "__main__":
-    main()
+    #run_dir = main()
+    #compare_results(run_dir)
+    run_dir = "compression_run_20260702_131251/"
+    compare_results(run_dir)

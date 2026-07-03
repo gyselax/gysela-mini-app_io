@@ -653,7 +653,5 @@ def main():
 
 
 if __name__ == "__main__":
-    #run_dir = main()
-    #compare_results(run_dir)
-    run_dir = "compression_run_20260702_131251/"
+    run_dir = main()
     compare_results(run_dir)

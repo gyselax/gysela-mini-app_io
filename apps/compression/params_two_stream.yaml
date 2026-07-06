@@ -35,4 +35,4 @@ CompressionBenchmark:
   compression_period: 10
 
 Output:
-  time_diag: 0.5
+  nbiter_diag: 2  # diagnostics every N timesteps (must divide compression_period)

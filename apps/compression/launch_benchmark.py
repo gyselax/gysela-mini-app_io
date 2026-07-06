@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
+import time
 from datetime import datetime
 
 import yaml
@@ -12,6 +14,7 @@ import yaml
 # Compression params / names
 # ------------------------------------------------------------------
 from compression_methods.PCA import PCACompressor
+from evaluate_compression import plot_diags
 
 COMPRESSOR_CLASS = PCACompressor
 COMPRESSOR_PARAMS = {
@@ -26,7 +29,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
 SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
-SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out.yaml")
+SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
+ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
+ACTIVATE_SCRIPT = os.path.join(BASE_DIR, "apps", "io", "activate_deisa_spack_env.sh")
+SCHEFILE = os.path.join(BASE_DIR, "scheduler.json")
 
 
 def parse_args():
@@ -89,6 +95,13 @@ def parse_args():
             "Keep the copied pdi_out.yaml inside the run directory. "
             "By default, it is removed after the workflow finishes."
         ),
+    )
+
+    parser.add_argument(
+        "--dask-workers",
+        type=int,
+        default=1,
+        help="Number of Dask workers to launch per simulation segment (default: 1).",
     )
 
     return parser.parse_args()
@@ -157,27 +170,15 @@ def read_benchmark_config(config):
 
 
 def compute_diagnostic_step(config):
-    dt = float(config["Algorithm"]["deltat"])
-    time_diag = float(config["Output"]["time_diag"])
-    nbstep_diag = int(time_diag / dt)
+    nbstep_diag = int(config["Output"]["nbiter_diag"])
 
     if nbstep_diag <= 0:
-        raise RuntimeError(f"Invalid diagnostic step: time_diag={time_diag}, deltat={dt}.")
-
-    if abs(nbstep_diag * dt - time_diag) > 1e-12:
-        raise RuntimeError(
-            f"Output.time_diag must be an integer multiple of Algorithm.deltat. "
-            f"Got time_diag={time_diag}, deltat={dt}, time_diag/deltat={time_diag / dt}."
-        )
+        raise RuntimeError(f"Invalid diagnostic step: Output.nbiter_diag={nbstep_diag} must be positive.")
 
     return nbstep_diag
 
 
-def assert_iterations_are_diagnostic_outputs(
-    iter_total,
-    compression_period,
-    nbstep_diag,
-):
+def assert_iterations_are_diagnostic_outputs(iter_total, compression_period, nbstep_diag):
     if compression_period % nbstep_diag != 0:
         raise RuntimeError(
             f"Compression period must be a multiple of nbstep_diag={nbstep_diag}. "
@@ -187,25 +188,6 @@ def assert_iterations_are_diagnostic_outputs(
     if iter_total % nbstep_diag != 0:
         raise RuntimeError(
             f"Algorithm.nbiter must be a multiple of nbstep_diag={nbstep_diag}. " f"Got nbiter={iter_total}."
-        )
-
-
-def assert_complete_branch(branch_dir, file_index_total):
-    missing = []
-
-    for idx in range(file_index_total + 1):
-        filepath = os.path.join(branch_dir, f"GYSELALIBXX_{idx:05d}.h5")
-
-        if not os.path.exists(filepath):
-            missing.append(idx)
-
-    if missing:
-        preview = ", ".join(f"{idx:05d}" for idx in missing[:10])
-        suffix = "..." if len(missing) > 10 else ""
-
-        raise RuntimeError(
-            f"Branch {os.path.basename(branch_dir)} is incomplete. "
-            f"Missing {len(missing)} diagnostic file(s): {preview}{suffix}"
         )
 
 
@@ -282,43 +264,124 @@ def create_yaml_override(
         yaml.dump(config, f, default_flow_style=False)
 
 
-def remove_restart_output_before_rewrite(
-    branch_dir,
-    current_iter,
-    nbstep_diag,
-):
-    if current_iter % nbstep_diag != 0:
-        raise RuntimeError(f"Restart iteration {current_iter} is not aligned with " f"nbstep_diag={nbstep_diag}.")
+# ------------------------------------------------------------------
+# Dask infrastructure
+# ------------------------------------------------------------------
 
-    file_index = current_iter // nbstep_diag
-
-    filepath = os.path.join(
-        branch_dir,
-        f"GYSELALIBXX_{file_index:05d}.h5",
-    )
-
-    if os.path.exists(filepath):
-        print(f"  [Restart Output Refresh] Removing existing " f"{os.path.basename(filepath)} before restart rewrite")
-        os.remove(filepath)
-
-
-def run_sim(branch_name, gysela_yaml, pdi_yaml, work_dir):
-    print(f"\n--- Running: {branch_name} ---")
-
-    os.makedirs(work_dir, exist_ok=True)
-
-    exec_path = os.path.abspath(EXEC_CMD[-1])
-    abs_gysela = os.path.abspath(gysela_yaml)
-    abs_pdi = os.path.abspath(pdi_yaml)
-
-    cmd = EXEC_CMD[:-1] + [exec_path, abs_gysela, abs_pdi]
-
-    subprocess.run(
-        cmd,
-        cwd=work_dir,
-        env=os.environ.copy(),
+def load_deisa_env():
+    """Source the spack+venv activation script and capture the resulting environment."""
+    if not os.path.exists(ACTIVATE_SCRIPT):
+        raise RuntimeError(
+            f"Deisa activation script not found: {ACTIVATE_SCRIPT}\n"
+            "Ensure the spack environment and venv are set up as described "
+            "in apps/io/README.md."
+        )
+    result = subprocess.run(
+        ["bash", "-c",
+         f'. "{ACTIVATE_SCRIPT}" && python3 -c '
+         '"import os,json,sys; sys.stdout.write(json.dumps(dict(os.environ)))"'],
+        capture_output=True,
+        text=True,
         check=True,
     )
+    return json.loads(result.stdout)
+
+
+def start_dask(deisa_env, n_workers=1):
+    """Start Dask scheduler and workers. Returns (sch_proc, worker_proc, updated_env)."""
+    if os.path.exists(SCHEFILE):
+        os.remove(SCHEFILE)
+
+    sch_proc = subprocess.Popen(
+        ["dask-scheduler", f"--scheduler-file={SCHEFILE}"],
+        env=deisa_env,
+    )
+
+    print("  Waiting for Dask scheduler", end="", flush=True)
+    deadline = time.time() + 60
+    while not os.path.exists(SCHEFILE):
+        if time.time() > deadline:
+            sch_proc.kill()
+            raise RuntimeError("Dask scheduler did not start within 60 seconds.")
+        time.sleep(1)
+        print(".", end="", flush=True)
+    print(" ready")
+
+    with open(SCHEFILE) as f:
+        scheduler_address = json.load(f)["address"]
+
+    deisa_env = dict(deisa_env)
+    deisa_env["DEISA_DASK_SCHEDULER_ADDRESS"] = scheduler_address
+
+    worker_proc = subprocess.Popen(
+        [
+            "dask-worker",
+            f"--nworkers={n_workers}",
+            "--local-directory=/tmp",
+            f"--scheduler-file={SCHEFILE}",
+        ],
+        env=deisa_env,
+    )
+
+    print(f"  Waiting 10 s for {n_workers} worker(s) to connect...")
+    time.sleep(10)
+
+    return sch_proc, worker_proc, deisa_env
+
+
+def stop_dask(sch_proc, worker_proc):
+    """Kill Dask scheduler and workers."""
+    for proc in (worker_proc, sch_proc):
+        if proc is not None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+
+def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1):
+    """Start Dask, run simulation and diagnostics in parallel, stop Dask.
+
+    Both the simulation and diagnostics.py run with work_dir as CWD so that
+    HDF5 snapshots and diagnostics.csv are written there.
+    """
+    print(f"\n--- Running: {branch_name} ---")
+    os.makedirs(work_dir, exist_ok=True)
+
+    deisa_env = load_deisa_env()
+    sch_proc, worker_proc, deisa_env = start_dask(deisa_env, n_workers)
+
+    try:
+        exec_path = os.path.abspath(EXEC_CMD[-1])
+        abs_gysela = os.path.abspath(gysela_yaml)
+        abs_pdi = os.path.abspath(pdi_yaml)
+        sim_cmd = EXEC_CMD[:-1] + [exec_path, abs_gysela, abs_pdi]
+
+        analytics_proc = subprocess.Popen(
+            ["python3", ANALYTICS_SCRIPT],
+            cwd=work_dir,
+            env=deisa_env,
+        )
+
+        sim_proc = subprocess.Popen(
+            sim_cmd,
+            cwd=work_dir,
+            env=deisa_env,
+        )
+
+        analytics_rc = analytics_proc.wait()
+        sim_rc = sim_proc.wait()
+
+        if analytics_rc != 0:
+            raise RuntimeError(
+                f"Analytics process for '{branch_name}' exited with return code {analytics_rc}."
+            )
+        if sim_rc != 0:
+            raise RuntimeError(
+                f"Simulation '{branch_name}' exited with return code {sim_rc}."
+            )
+    finally:
+        stop_dask(sch_proc, worker_proc)
 
 
 def write_compression_manifest(run_dir, compression_events):
@@ -335,7 +398,7 @@ def write_compression_manifest(run_dir, compression_events):
     print(f"\nCompression event manifest written to: {manifest_path}")
 
 
-def run_baseline(run_dir, run_pdi_yaml, iter_total):
+def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
     dir_baseline = os.path.join(run_dir, "branch_baseline")
     yaml_baseline = os.path.join(run_dir, "config_baseline.yaml")
 
@@ -348,11 +411,12 @@ def run_baseline(run_dir, run_pdi_yaml, iter_total):
         iter_offset=0,
     )
 
-    run_sim(
+    run_sim_with_diagnostics(
         branch_name="Baseline",
         gysela_yaml=yaml_baseline,
         pdi_yaml=run_pdi_yaml,
         work_dir=dir_baseline,
+        n_workers=n_workers,
     )
 
     return dir_baseline
@@ -363,7 +427,7 @@ def run_periodic_compressed_branch(
     run_pdi_yaml,
     iter_total,
     compression_period,
-    nbstep_diag,
+    n_workers=1,
     keep_payloads=False,
     keep_restart_approximations=False,
     keep_segment_configs=False,
@@ -401,18 +465,12 @@ def run_periodic_compressed_branch(
             iter_offset=current_iter,
         )
 
-        if nb_restart > 0:
-            remove_restart_output_before_rewrite(
-                branch_dir=dir_compressed,
-                current_iter=current_iter,
-                nbstep_diag=nbstep_diag,
-            )
-
-        run_sim(
-            branch_name=(f"Compressed segment {segment_id} " f"({current_iter} -> {next_iter})"),
+        run_sim_with_diagnostics(
+            branch_name=(f"Compressed segment {segment_id} ({current_iter} -> {next_iter})"),
             gysela_yaml=yaml_segment,
             pdi_yaml=run_pdi_yaml,
             work_dir=dir_compressed,
+            n_workers=n_workers,
         )
 
         if nb_restart > 0 and not keep_restart_approximations:
@@ -432,16 +490,15 @@ def run_periodic_compressed_branch(
         if current_iter >= iter_total:
             break
 
-        if current_iter % nbstep_diag != 0:
+        if current_iter % compression_period != 0:
             raise RuntimeError(
-                f"Cannot compress at iteration {current_iter}: " f"not a multiple of nbstep_diag={nbstep_diag}."
+                f"Cannot compress at iteration {current_iter}: "
+                f"not a multiple of compression_period={compression_period}."
             )
-
-        file_index = current_iter // nbstep_diag
 
         raw_restart = os.path.join(
             dir_compressed,
-            f"GYSELALIBXX_{file_index:05d}.h5",
+            f"GYSELALIBXX_{current_iter:05d}.h5",
         )
 
         approx_restart = os.path.join(
@@ -475,14 +532,13 @@ def run_periodic_compressed_branch(
             {
                 "segment_id": segment_id,
                 "iteration": current_iter,
-                "file_index": file_index,
+                "file_index": current_iter,
                 "branch_restart": os.path.relpath(raw_restart, run_dir),
                 "approx_restart": os.path.relpath(approx_restart, run_dir),
                 "compressed_payload": (os.path.relpath(compressed_payload, run_dir) if keep_payloads else None),
                 "method_name": metrics.get("method_name"),
                 "param_names": metrics.get("param_names", []),
                 "params": metrics.get("params", {}),
-                # Backward-compatible convenience key for PCA runs.
                 "n_components": metrics.get("param_n_components"),
                 "raw_restart_size": raw_restart_size,
                 "approx_restart_size": approx_restart_size,
@@ -508,6 +564,8 @@ def run_periodic_compressed_branch(
                 "compressed PCA payload",
             )
 
+        remove_file_if_exists(raw_restart, "consumed raw restart")
+
         restart_file = os.path.abspath(approx_restart)
         segment_id += 1
 
@@ -516,11 +574,27 @@ def run_periodic_compressed_branch(
     return dir_compressed
 
 
+def compare_results(run_dir):
+    diag_files = []
+    for entry in sorted(os.listdir(run_dir)):
+        csv_path = os.path.join(run_dir, entry, "diagnostics.csv")
+        if os.path.exists(csv_path):
+            diag_files.append(csv_path)
+
+    if not diag_files:
+        print("\nNo diagnostics.csv files found — skipping comparison plot.")
+        return
+
+    output = os.path.join(run_dir, "diags_comparison.png")
+    plot_diags(diag_files, output=output)
+
+
 def main():
     args = parse_args()
 
     assert_file_exists(SOURCE_GYSELA_YAML, "base GYSELA input template")
     assert_file_exists(SOURCE_PDI_YAML, "base PDI input template")
+    assert_file_exists(ANALYTICS_SCRIPT, "in-situ diagnostics script")
 
     run_dir = create_or_select_run_dir(
         requested_run_dir=args.run_dir,
@@ -529,7 +603,7 @@ def main():
 
     print(f"Master directory initialised: {run_dir}")
 
-    run_pdi_yaml = os.path.join(run_dir, "pdi_out.yaml")
+    run_pdi_yaml = os.path.join(run_dir, "pdi_out_diags.yaml")
     shutil.copy2(SOURCE_PDI_YAML, run_pdi_yaml)
 
     with open(SOURCE_GYSELA_YAML, "r") as f:
@@ -544,43 +618,40 @@ def main():
         nbstep_diag=nbstep_diag,
     )
 
-    file_index_total = iter_total // nbstep_diag
-
     print(f"Total iterations       : {iter_total}")
     print(f"Compression period K   : {compression_period}")
     print(f"Diagnostic step        : {nbstep_diag}")
-    print(f"Final diagnostic index : {file_index_total}")
 
     if args.overwrite:
-        dir_baseline = os.path.join(run_dir, "branch_baseline")
-        print("\n--- Skipping reference simulation (--overwrite): reusing existing reference data without compression")
+        print("\n--- Skipping reference simulation (--overwrite): reusing existing baseline ---")
     else:
-        dir_baseline = run_baseline(
+        run_baseline(
             run_dir=run_dir,
             run_pdi_yaml=run_pdi_yaml,
             iter_total=iter_total,
+            n_workers=args.dask_workers,
         )
 
-    assert_complete_branch(dir_baseline, file_index_total)
-
-    dir_compressed = run_periodic_compressed_branch(
+    run_periodic_compressed_branch(
         run_dir=run_dir,
         run_pdi_yaml=run_pdi_yaml,
         iter_total=iter_total,
         compression_period=compression_period,
-        nbstep_diag=nbstep_diag,
+        n_workers=args.dask_workers,
         keep_payloads=args.keep_payloads,
         keep_restart_approximations=args.keep_restart_approximations,
         keep_segment_configs=args.keep_segment_configs,
     )
 
-    assert_complete_branch(dir_compressed, file_index_total)
-
     if not args.keep_pdi_copy:
         remove_file_if_exists(run_pdi_yaml, "copied PDI config")
 
-    print(f"\nWorkflow complete. All files are populated inside: {run_dir}")
+    
+
+    print(f"\nWorkflow complete. All files are in: {run_dir}")
+    return run_dir
 
 
 if __name__ == "__main__":
-    main()
+    run_dir = main()
+    compare_results(run_dir)

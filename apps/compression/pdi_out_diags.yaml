@@ -1,0 +1,207 @@
+metadata:
+  fdistribu_filename_size:  size_t
+  fdistribu_filename: { type: array, subtype: char, size: "$fdistribu_filename_size" }
+  Nx_spline_cells : int
+  Ny_spline_cells : int
+  Nvx_spline_cells : int
+  Nvy_spline_cells : int
+  iter : int
+  iter_offset : int
+  time_saved : double
+  deltat: double
+  absolute_time: double
+  nbstep_diag: int
+  iter_saved : int
+  MeshX_extents: { type: array, subtype: int64, size: 1 }
+  MeshX:
+    type: array
+    subtype: double
+    size: [ '$MeshX_extents[0]' ]
+  MeshY_extents: { type: array, subtype: int64, size: 1 }
+  MeshY:
+    type: array
+    subtype: double
+    size: [ '$MeshY_extents[0]' ]
+  MeshVx_extents: { type: array, subtype: int64, size: 1 }
+  MeshVx:
+    type: array
+    subtype: double
+    size: [ '$MeshVx_extents[0]' ]
+  MeshVy_extents: { type: array, subtype: int64, size: 1 }
+  MeshVy:
+    type: array
+    subtype: double
+    size: [ '$MeshVy_extents[0]' ]
+  Nkinspecies: int
+  fdistribu_charges_extents : { type: array, subtype: int64, size: 1 }
+  fdistribu_charges:
+    type: array
+    subtype: double
+    size: [ '$fdistribu_charges_extents[0]' ]
+  fdistribu_masses_extents : { type: array, subtype: int64, size: 1 }
+  fdistribu_masses:
+    type: array
+    subtype: double
+    size: [ '$fdistribu_masses_extents[0]' ]
+  fdistribu_eq_extents : { type: array, subtype: int64, size: 3 }
+  fdistribu_eq:
+    type: array
+    subtype: double
+    size: [ '$fdistribu_eq_extents[0]', '$fdistribu_eq_extents[1]', '$fdistribu_eq_extents[2]' ]
+
+  #-- Parallel data (local chunk)
+  local_fdistribu_starts: { type: array, subtype: size_t, size: 5 }
+  local_fdistribu_extents: { type: array, subtype: size_t, size: 5 }
+
+  #-- Global fdistribu shape (for bridge metadata — distinct from 'fdistribu' data element)
+  global_fdistribu_starts: { type: array, subtype: size_t, size: 5 }
+  global_fdistribu_extents: { type: array, subtype: size_t, size: 5 }
+
+
+data:
+  fdistribu:
+    type: array
+    subtype: double
+    size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+  electrostatic_potential_extents: { type: array, subtype: int64, size: 2 }
+  electrostatic_potential:
+    type: array
+    subtype: double
+    size: [ '$electrostatic_potential_extents[0]', '$electrostatic_potential_extents[1]' ]
+
+plugins:
+  mpi:
+  pycall:
+    on_event:
+      Init:
+        with: {}
+        exec: |
+          import numpy as np
+          from mpi4py import MPI
+          from deisa.dask import Bridge
+          comm = MPI.COMM_WORLD
+      InitBridge:
+        with: { global_fdistribu_extents: $global_fdistribu_extents,
+                local_fdistribu_extents: $local_fdistribu_extents,
+                local_fdistribu_starts: $local_fdistribu_starts
+              }
+        exec: |
+          global_shape = tuple(int(x) for x in global_fdistribu_extents)
+          local_shape  = tuple(int(x) for x in local_fdistribu_extents)
+          chunk_pos    = tuple((local_fdistribu_starts // local_fdistribu_extents).astype(int).tolist())
+          arrays_metadata = {
+              'fdistribu': {
+                  'global_shape':   global_shape,
+                  'chunk_shape':    local_shape,
+                  'chunk_position': chunk_pos,
+              },
+          }
+          bridge = Bridge(comm, arrays_metadata)
+      iteration:
+        with:
+          fdistribu: $fdistribu
+          it: $iter
+          t: $absolute_time
+          iter_offset: $iter_offset
+          nbstep_diag: $nbstep_diag
+          MeshX: $MeshX
+          MeshY: $MeshY
+          MeshVx: $MeshVx
+          MeshVy: $MeshVy
+        exec: |
+          timestep = int(it) + int(iter_offset)
+          if timestep % int(nbstep_diag) == 0:
+            # ===== will no longer be needed once xarrays can be sent through the bridge ======
+            if comm.Get_rank() == 0:
+              client = bridge.client
+              client.publish_dataset(coords={
+                'MeshX':  np.array(MeshX),
+                'MeshY':  np.array(MeshY),
+                'MeshVx': np.array(MeshVx),
+                'MeshVy': np.array(MeshVy),
+                'iter': timestep,
+                'absolute_time': np.array([float(t)]),
+              }, override=True)
+            comm.Barrier()
+            # =================================================================================
+            bridge.send("fdistribu", fdistribu, timestep)
+      last_iteration:
+        with:
+          fdistribu: $fdistribu
+          it: $iter
+          t: $absolute_time
+          iter_offset: $iter_offset
+          MeshX: $MeshX
+          MeshY: $MeshY
+          MeshVx: $MeshVx
+          MeshVy: $MeshVy
+        exec: |
+          timestep = int(it) + int(iter_offset)
+          # ===== will no longer be needed once xarrays can be sent through the bridge ======
+          if comm.Get_rank() == 0:
+            client = bridge.client
+            client.publish_dataset(coords={
+              'MeshX':  np.array(MeshX),
+              'MeshY':  np.array(MeshY),
+              'MeshVx': np.array(MeshVx),
+              'MeshVy': np.array(MeshVy),
+              'iter': timestep,
+              'absolute_time': np.array([float(t)]),
+            }, override=True)
+          comm.Barrier()
+          # =================================================================================
+          bridge.send("fdistribu", fdistribu, timestep)
+      EndSimulation:
+        with:
+          it: $iter
+          iter_offset: $iter_offset
+        exec: |
+          bridge.close(int(it) + int(iter_offset))
+  set_value:
+    on_init:
+      - share:
+        - iter_saved: 0
+        - absolute_time: 0.0
+    on_data:
+      iter:
+        - set:
+          # Shift file number in order not to change predcorr_implementation
+          - iter_saved: '${iter} + ${iter_offset}'
+          - absolute_time: '(${iter} + ${iter_offset}) * ${deltat}'
+    on_finalize:
+      - release: [iter_saved, absolute_time]
+  decl_hdf5:
+    - file: '${fdistribu_filename}'
+      communicator: $MPI_COMM_WORLD
+      on_event: [read_fdistribu]
+      datasets:
+        fdistribu:
+          type: array
+          subtype: double
+          size: ['$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]']
+      read:
+        fdistribu:
+          dataset_selection:
+            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+            start: ['$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]']
+    - file: 'GYSELALIBXX_initstate.h5'
+      on_event: [initial_state]
+      collision_policy: replace_and_warn
+      write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
+    - file: 'GYSELALIBXX_${iter_saved:05}.h5'
+      communicator: $MPI_COMM_WORLD
+      on_event: [last_iteration]
+      collision_policy: replace_and_warn
+      datasets:
+        fdistribu:
+          type: array
+          subtype: double
+          size: [ '$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]' ]
+      write:
+        time_saved: $absolute_time
+        fdistribu:
+          dataset_selection:
+            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+            start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
+        electrostatic_potential: ~
+  #trace: ~

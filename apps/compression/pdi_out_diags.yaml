@@ -11,6 +11,7 @@ metadata:
   deltat: double
   absolute_time: double
   nbstep_diag: int
+  nb_step_compression: int
   iter_saved : int
   MeshX_extents: { type: array, subtype: int64, size: 1 }
   MeshX:
@@ -79,6 +80,7 @@ plugins:
           import numpy as np
           from mpi4py import MPI
           from deisa.dask import Bridge
+          import compression_diagnostics
           comm = MPI.COMM_WORLD
       InitBridge:
         with: { global_fdistribu_extents: $global_fdistribu_extents,
@@ -104,12 +106,17 @@ plugins:
           t: $absolute_time
           iter_offset: $iter_offset
           nbstep_diag: $nbstep_diag
+          nb_step_compression: $nb_step_compression
           MeshX: $MeshX
           MeshY: $MeshY
           MeshVx: $MeshVx
           MeshVy: $MeshVy
         exec: |
           timestep = int(it) + int(iter_offset)
+
+          if int(nb_step_compression) > 0 and timestep % int(nb_step_compression) == 0:
+            compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+
           if timestep % int(nbstep_diag) == 0:
             # ===== will no longer be needed once xarrays can be sent through the bridge ======
             if comm.Get_rank() == 0:
@@ -131,12 +138,17 @@ plugins:
           it: $iter
           t: $absolute_time
           iter_offset: $iter_offset
+          nb_step_compression: $nb_step_compression
           MeshX: $MeshX
           MeshY: $MeshY
           MeshVx: $MeshVx
           MeshVy: $MeshVy
         exec: |
           timestep = int(it) + int(iter_offset)
+
+          if int(nb_step_compression) > 0 and timestep % int(nb_step_compression) == 0:
+            compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+
           # ===== will no longer be needed once xarrays can be sent through the bridge ======
           if comm.Get_rank() == 0:
             client = bridge.client

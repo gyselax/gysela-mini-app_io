@@ -56,35 +56,6 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--keep-payloads",
-        action="store_true",
-        help=(
-            "Keep restart_iter_XXXXX_compressed.npz payload files. "
-            "By default, they are deleted after their size and metrics are "
-            "stored in compression_events.yaml."
-        ),
-    )
-
-    parser.add_argument(
-        "--keep-restart-approximations",
-        action="store_true",
-        help=(
-            "Keep restart_iter_XXXXX_approx.h5 files after they have been "
-            "used for restart. By default, each approximation is deleted after "
-            "the segment that consumes it has finished."
-        ),
-    )
-
-    parser.add_argument(
-        "--keep-segment-configs",
-        action="store_true",
-        help=(
-            "Keep config_compressed_segment_XXX.yaml files. "
-            "By default, segment configs are removed after each segment run."
-        ),
-    )
-
-    parser.add_argument(
         "--keep-pdi-copy",
         action="store_true",
         help=(
@@ -248,7 +219,8 @@ def create_yaml_override(
     fdist_file,
     nbiter,
     iter_offset,
-    compression_period_online=0,
+    compression_period=0,
+    compression_mode=0,
 ):
     with open(base_yaml_path, "r") as f:
         config = yaml.safe_load(f)
@@ -262,7 +234,8 @@ def create_yaml_override(
     config["Algorithm"]["nbiter"] = nbiter
 
     config.setdefault("CompressionBenchmark", {})
-    config["CompressionBenchmark"]["compression_period"] = compression_period_online
+    config["CompressionBenchmark"]["compression_period"] = compression_period
+    config["CompressionBenchmark"]["compression_mode"] = compression_mode
 
     with open(output_yaml_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
@@ -342,6 +315,19 @@ def stop_dask(sch_proc, worker_proc):
             except ProcessLookupError:
                 pass
 
+def print_branch_banner(branch_name):
+    label = f" {branch_name} "
+    width = max(70, len(label) + 4)
+    bar = "═" * (width - 2)
+    cyan = "\033[96m"
+    bold = "\033[1m"
+    reset = "\033[0m"
+    print()
+    print(f"{cyan}{bold}╔{bar}╗{reset}")
+    print(f"{cyan}{bold}║{label.center(width - 2)}║{reset}")
+    print(f"{cyan}{bold}╚{bar}╝{reset}")
+    print()
+
 
 def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1):
     """Start Dask, run simulation and diagnostics in parallel, stop Dask.
@@ -349,7 +335,7 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
     Both the simulation and diagnostics.py run with work_dir as CWD so that
     HDF5 snapshots and diagnostics.csv are written there.
     """
-    print(f"\n--- Running: {branch_name} ---")
+    print_branch_banner(branch_name)
     os.makedirs(work_dir, exist_ok=True)
 
     deisa_env = load_deisa_env()
@@ -426,156 +412,42 @@ def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
     return dir_baseline
 
 
-def run_periodic_compressed_branch(
-    run_dir,
-    run_pdi_yaml,
-    iter_total,
-    compression_period,
-    n_workers=1,
-    keep_payloads=False,
-    keep_restart_approximations=False,
-    keep_segment_configs=False,
-):
-    dir_compressed = os.path.join(run_dir, "branch_compressed")
-    restart_dir = os.path.join(run_dir, "periodic_restarts")
+def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1):
+    dir_offline = os.path.join(run_dir, "branch_offline_compressed")
+    yaml_offline = os.path.join(run_dir, "config_offline_compressed.yaml")
 
-    os.makedirs(dir_compressed, exist_ok=True)
-    os.makedirs(restart_dir, exist_ok=True)
+    create_yaml_override(
+        SOURCE_GYSELA_YAML,
+        yaml_offline,
+        nb_restart=0,
+        fdist_file="none",
+        nbiter=iter_total,
+        iter_offset=0,
+        compression_period=compression_period,
+        compression_mode=2,
+    )
 
-    current_iter = 0
-    segment_id = 0
-    restart_file = "none"
-    compression_events = []
+    run_sim_with_diagnostics(
+        branch_name="Offline compressed",
+        gysela_yaml=yaml_offline,
+        pdi_yaml=run_pdi_yaml,
+        work_dir=dir_offline,
+        n_workers=n_workers,
+    )
 
-    while current_iter < iter_total:
-        remaining_iter = iter_total - current_iter
-        segment_nbiter = min(compression_period, remaining_iter)
-        next_iter = current_iter + segment_nbiter
+    events = _collect_offline_compression_events(dir_offline)
+    write_compression_manifest(run_dir, events)
 
-        yaml_segment = os.path.join(
-            run_dir,
-            f"config_compressed_segment_{segment_id:03d}.yaml",
-        )
+    return dir_offline
 
-        nb_restart = 0 if segment_id == 0 else segment_id
-        restart_file_used_by_segment = restart_file
 
-        create_yaml_override(
-            SOURCE_GYSELA_YAML,
-            yaml_segment,
-            nb_restart=nb_restart,
-            fdist_file=restart_file,
-            nbiter=segment_nbiter,
-            iter_offset=current_iter,
-        )
+def _collect_offline_compression_events(work_dir):
+    csv_path = os.path.join(work_dir, "compression_events_offline.csv")
+    if not os.path.exists(csv_path):
+        return []
+    with open(csv_path, newline="") as fh:
+        return [dict(row) for row in csv.DictReader(fh)]
 
-        run_sim_with_diagnostics(
-            branch_name=(f"Compressed segment {segment_id} ({current_iter} -> {next_iter})"),
-            gysela_yaml=yaml_segment,
-            pdi_yaml=run_pdi_yaml,
-            work_dir=dir_compressed,
-            n_workers=n_workers,
-        )
-
-        if nb_restart > 0 and not keep_restart_approximations:
-            remove_file_if_exists(
-                restart_file_used_by_segment,
-                "consumed restart approximation",
-            )
-
-        if not keep_segment_configs:
-            remove_file_if_exists(
-                yaml_segment,
-                "temporary compressed-segment config",
-            )
-
-        current_iter = next_iter
-
-        if current_iter >= iter_total:
-            break
-
-        if current_iter % compression_period != 0:
-            raise RuntimeError(
-                f"Cannot compress at iteration {current_iter}: "
-                f"not a multiple of compression_period={compression_period}."
-            )
-
-        raw_restart = os.path.join(
-            dir_compressed,
-            f"GYSELALIBXX_{current_iter:05d}.h5",
-        )
-
-        approx_restart = os.path.join(
-            restart_dir,
-            f"restart_iter_{current_iter:05d}_approx.h5",
-        )
-
-        compressed_payload = os.path.join(
-            restart_dir,
-            f"restart_iter_{current_iter:05d}_compressed.npz",
-        )
-
-        assert_file_exists(
-            raw_restart,
-            f"restart source file at iteration {current_iter}",
-        )
-
-        raw_restart_size = os.path.getsize(raw_restart)
-
-        metrics = compress_decompress(
-            input_h5=raw_restart,
-            output_h5=approx_restart,
-            compressed_path=compressed_payload,
-        )
-
-        approx_restart_size = os.path.getsize(approx_restart) if os.path.exists(approx_restart) else None
-
-        compressed_payload_size = os.path.getsize(compressed_payload) if os.path.exists(compressed_payload) else None
-
-        compression_events.append(
-            {
-                "segment_id": segment_id,
-                "iteration": current_iter,
-                "file_index": current_iter,
-                "branch_restart": os.path.relpath(raw_restart, run_dir),
-                "approx_restart": os.path.relpath(approx_restart, run_dir),
-                "compressed_payload": (os.path.relpath(compressed_payload, run_dir) if keep_payloads else None),
-                "method_name": metrics.get("method_name"),
-                "param_names": metrics.get("param_names", []),
-                "params": metrics.get("params", {}),
-                "n_components": metrics.get("param_n_components"),
-                "raw_restart_size": raw_restart_size,
-                "approx_restart_size": approx_restart_size,
-                "compressed_payload_size": compressed_payload_size,
-                "explained_variance_ratio_sum": metrics.get("explained_variance_ratio_sum"),
-                "relative_l2_error": float(metrics["relative_l2_error"]),
-                "max_abs_error": float(metrics["max_abs_error"]),
-                "mean_abs_error": float(metrics["mean_abs_error"]),
-                "rmse": float(metrics["rmse"]),
-                "compression_seconds": metrics.get("compression_seconds"),
-                "decompression_seconds": metrics.get("decompression_seconds"),
-                "compression_ratio": (
-                    None if metrics["compression_ratio"] is None else float(metrics["compression_ratio"])
-                ),
-                "approx_restart_kept": keep_restart_approximations,
-                "compressed_payload_kept": keep_payloads,
-            }
-        )
-
-        if not keep_payloads:
-            remove_file_if_exists(
-                compressed_payload,
-                "compressed PCA payload",
-            )
-
-        remove_file_if_exists(raw_restart, "consumed raw restart")
-
-        restart_file = os.path.abspath(approx_restart)
-        segment_id += 1
-
-    write_compression_manifest(run_dir, compression_events)
-
-    return dir_compressed
 
 def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1):
     dir_online = os.path.join(run_dir, "branch_online_compressed")
@@ -588,7 +460,8 @@ def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_
         fdist_file="none",
         nbiter=iter_total,
         iter_offset=0,
-        compression_period_online=compression_period,
+        compression_period=compression_period,
+        compression_mode=1,
     )
 
     run_sim_with_diagnostics(
@@ -683,21 +556,16 @@ def main():
             n_workers=args.dask_workers,
         )
     else:
-        run_periodic_compressed_branch(
+        run_offline_compressed_branch(
             run_dir=run_dir,
             run_pdi_yaml=run_pdi_yaml,
             iter_total=iter_total,
             compression_period=compression_period,
             n_workers=args.dask_workers,
-            keep_payloads=args.keep_payloads,
-            keep_restart_approximations=args.keep_restart_approximations,
-            keep_segment_configs=args.keep_segment_configs,
         )
 
     if not args.keep_pdi_copy:
         remove_file_if_exists(run_pdi_yaml, "copied PDI config")
-
-    
 
     print(f"\nWorkflow complete. All files are in: {run_dir}")
     return run_dir

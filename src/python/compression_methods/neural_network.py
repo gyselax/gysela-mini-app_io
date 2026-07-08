@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-
+import jax.numpy as jnp
 
 class NeuralNetworkCompressor:
     """Placeholder neural-network compressor. Training is not implemented yet;
@@ -33,7 +33,8 @@ class NeuralNetworkCompressor:
         print(f"data shape: {array.shape}")
         # array is fdistribu[sp, x, y, vx, vy]; slice to f[x, vx] (species 0, summed over y, vy)
         f_xvx =array[0,:,8,:,8]
-
+        ariel = jnp.zeros(4)
+        print(f"ariel: {jnp.sum(ariel)}", flush=True)
         fig, ax = plt.subplots()
         mesh = ax.pcolormesh(f_xvx, cmap="viridis", shading="auto")
         fig.colorbar(mesh, ax=ax, label="f(x, vx)")

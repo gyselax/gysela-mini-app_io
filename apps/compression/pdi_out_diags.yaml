@@ -116,7 +116,7 @@ plugins:
 
           if int(nb_step_compression) > 0 and timestep % int(nb_step_compression) == 0:
             compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
-
+          print(f"--------------------------timestep: {timestep}")
           if timestep % int(nbstep_diag) == 0:
             # ===== will no longer be needed once xarrays can be sent through the bridge ======
             if comm.Get_rank() == 0:

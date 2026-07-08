@@ -2,6 +2,8 @@
 
 from compression_methods.PCA import PCACompressor
 from compression_methods.random_noise import RandomNoiseCompressor
+from compression_methods.neural_network import NeuralNetworkCompressor
+
 
 OFFLINE_COMPRESSOR_CLASS = PCACompressor
 OFFLINE_COMPRESSOR_PARAMS = {
@@ -10,9 +12,14 @@ OFFLINE_COMPRESSOR_PARAMS = {
     "clip_nonnegative": False,
 }
 
-ONLINE_COMPRESSOR_CLASS = RandomNoiseCompressor
+# ONLINE_COMPRESSOR_CLASS = RandomNoiseCompressor
+# ONLINE_COMPRESSOR_PARAMS = {
+#     "relative_noise_level": 0.01,
+# }
+
+ONLINE_COMPRESSOR_CLASS = NeuralNetworkCompressor
 ONLINE_COMPRESSOR_PARAMS = {
-    "relative_noise_level": 0.01,
+    "latent_dim": 16,
 }
 
 

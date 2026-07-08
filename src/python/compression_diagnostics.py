@@ -28,7 +28,7 @@ def apply_online_compression(fdistribu, timestep, rank):
     """Rank-local compress/decompress round trip. Mutates fdistribu in place.
     """
     cfg = get_compression_config()
-    approx, metrics = cfg.compressor.compress_decompress_array(fdistribu)
+    approx, metrics = cfg.compressor.compress_decompress_array(fdistribu, rank=rank)
     fdistribu[...] = approx
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)

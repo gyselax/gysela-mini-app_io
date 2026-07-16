@@ -46,7 +46,7 @@ class SIRENScimbaINR(eqx.Module):
     """SIREN network, non-periodic. Raw input (x, y, vx, vy) -> in_size=4"""
     
     layers: tuple
-    omega_0: float
+    omega_0: float = eqx.field(static=True)
     
     def __init__(self, in_size: int, out_size: int, hidden_sizes: list[int], omega_0: float, key: jax.Array):
         self.omega_0 = omega_0
@@ -85,8 +85,8 @@ class PeriodicSIRENScimbaINR(eqx.Module):
         return self.network(periodic_embedding(x_input))
     
 class FourierScimbaINR(eqx.Module):
-    """Random Fourier Features, non-periodic. Rax input (x, y, vx, vy) -> in_features=4"""
-    network = MLP 
+    """Random Fourier Features, non-periodic. Raw input (x, y, vx, vy) -> in_features=4"""
+    network: MLP
     B: jnp.ndarray
     
     def __init__(self, in_features: int, n_freqs: int, hidden_sizes: list[int], sigma: float, key: jax.Array):
@@ -124,7 +124,7 @@ class PeriodicFourierScimbaINR(eqx.Module):
         
     def __call__(self, x_input: jnp.ndarray) -> jnp.ndarray:
         h = periodic_embedding(x_input)
-        proj = h @ self.B
+        proj = h @ jax.lax.stop_gradient(self.B)
         h_fourier = jnp.concatenate([jnp.sin(proj), jnp.cos(proj)], axis=-1)
         
         return self.network(h_fourier)
@@ -149,17 +149,6 @@ def _losses_function(model: eqx.Module, batch: tuple) -> dict:
     mse = jnp.mean((predictions - targets) ** 2)
     
     return {"total":mse}
-
-@jax.jit
-def _grad_loss_function(model: eqx.Module, batch: tuple) -> jnp.ndarray:
-    def loss_fn(m):
-        return _losses_function(m, batch)["total"]
-    
-    grads = eqx.filter_grad(loss_fn)(model)
-    flat_grads, _ = ravel_pytree(grads)
-    
-    return flat_grads
-
     
 # Compressor (offline)
 
@@ -296,7 +285,6 @@ class NeuralNetworkCompressor(Compressor):
         loss_history = []
         
         #Phase 1: ADAM, mini-batches
-        #adam_opt = ScimbaAdam(model, _losses_function, _grad_loss_function, learning_rate=self.lr)
         adam_opt = ScimbaAdam(model, _losses_function, learning_rate=self.lr)
         for i in range(self.max_iters):
             key, subkey = jax.random.split(key)
@@ -316,7 +304,6 @@ class NeuralNetworkCompressor(Compressor):
         
         #Phase 2: L-BFGS, full-batch
         full_batch = (inputs, targets)
-        #lbfgs_opt = ScimbaLBfgs(model, _losses_function, _grad_loss_function, max_iters=self.lbfgs_iters)
         lbfgs_opt = ScimbaLBfgs(model, _losses_function)
         for i in range(self.lbfgs_iters):
             loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
@@ -342,18 +329,18 @@ class NeuralNetworkCompressor(Compressor):
                 f"got shape {f.shape}"
             )
             
-        n_secies, nx, ny, nvx, nvy = f.shape
+        n_species, nx, ny, nvx, nvy = f.shape
         self.original_shape = f.shape
         
         inputs = self._build_inputs(nx, ny, nvx, nvy)
         
         key = jax.random.PRNGKey(self.seed)
-        warm_models = self._load_warm_start_models(n_secies, key)
+        warm_models = self._load_warm_start_models(n_species, key)
         
         self.models = []
         self.loss_histories = []
         
-        for isp in range(n_secies):
+        for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
             key, subkey = jax.random.split(key)
             t0 = time.perf_counter()

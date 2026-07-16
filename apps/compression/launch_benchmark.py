@@ -146,6 +146,22 @@ def assert_file_exists(path, description):
     if not os.path.exists(path):
         raise RuntimeError(f"Missing {description}: {path}")
 
+def read_mesh_config(config):
+    """Extracts the grid boundaries from the GYSELA YAML file"""
+    try:
+        mesh = config["SplineMesh"]
+        return {
+            "x_min": float(mesh["x_min"]),
+            "x_max": float(mesh["x_max"]),
+            "y_min": float(mesh["y_min"]),
+            "y_max": float(mesh["y_max"]),
+            "vx_min": float(mesh["vx_min"]),
+            "vx_max": float(mesh["vx_max"]),
+            "vy_min": float(mesh["vy_min"]),
+            "vy_max": float(mesh["vy_max"]),
+        }
+    except KeyError as exc:
+        raise RuntimeError("Missing SplineMesh parameters in the GYSELA YAML template.") from exc
 
 def read_benchmark_config(config):
     try:
@@ -204,8 +220,8 @@ def format_param_summary(metrics):
     return ", ".join(f"{key}={value}" for key, value in params.items())
 
 
-def compress_decompress(input_h5, output_h5, compressed_path):
-    compressor = build_offline_compressor()
+def compress_decompress(input_h5, output_h5, compressed_path, compressor_kwargs):
+    compressor = build_offline_compressor(**compressor_kwargs)
 
     print(
         f"  [{compressor.method_name} Compression] "
@@ -431,6 +447,7 @@ def run_periodic_compressed_branch(
     run_pdi_yaml,
     iter_total,
     compression_period,
+    mesh_kwargs,
     n_workers=1,
     keep_payloads=False,
     keep_restart_approximations=False,
@@ -446,6 +463,9 @@ def run_periodic_compressed_branch(
     segment_id = 0
     restart_file = "none"
     compression_events = []
+    
+    #tracking the previous payload for warm-starting
+    previous_compressed_payload = None
 
     while current_iter < iter_total:
         remaining_iter = iter_total - current_iter
@@ -521,12 +541,25 @@ def run_periodic_compressed_branch(
         )
 
         raw_restart_size = os.path.getsize(raw_restart)
+        
+        # preparing dynamic arguments for the compressor
+        compressor_kwargs = {**mesh_kwargs}
+        if previous_compressed_payload is not None:
+            compressor_kwargs["warm_start_payload"] = previous_compressed_payload
 
         metrics = compress_decompress(
             input_h5=raw_restart,
             output_h5=approx_restart,
             compressed_path=compressed_payload,
+            compressor_kwargs=compressor_kwargs,
         )
+        
+        # Compression is complete: we can now safely delete the old payload
+        if previous_compressed_payload is not None and not keep_payloads:
+            remove_file_if_exists(
+                previous_compressed_payload,
+                "consumed compressed INR payload",
+            )
 
         approx_restart_size = os.path.getsize(approx_restart) if os.path.exists(approx_restart) else None
 
@@ -561,18 +594,27 @@ def run_periodic_compressed_branch(
                 "compressed_payload_kept": keep_payloads,
             }
         )
-
+        """ 
         if not keep_payloads:
             remove_file_if_exists(
                 compressed_payload,
                 "compressed PCA payload",
             )
-
+        """
         remove_file_if_exists(raw_restart, "consumed raw restart")
 
         restart_file = os.path.abspath(approx_restart)
+        #save the path of the new payload for the next segment
+        previous_compressed_payload = os.path.abspath(compressed_payload)
+        
         segment_id += 1
 
+    if previous_compressed_payload is not None and not keep_payloads:
+        remove_file_if_exists(
+            previous_compressed_payload,
+            "final consumed compressed INR payload",
+        )
+    
     write_compression_manifest(run_dir, compression_events)
 
     return dir_compressed
@@ -653,6 +695,7 @@ def main():
 
     iter_total, compression_period = read_benchmark_config(base_cfg)
     nbstep_diag = compute_diagnostic_step(base_cfg)
+    mesh_kwargs = read_mesh_config(base_cfg)
 
     assert_iterations_are_diagnostic_outputs(
         iter_total=iter_total,
@@ -688,6 +731,7 @@ def main():
             run_pdi_yaml=run_pdi_yaml,
             iter_total=iter_total,
             compression_period=compression_period,
+            mesh_kwargs=mesh_kwargs,
             n_workers=args.dask_workers,
             keep_payloads=args.keep_payloads,
             keep_restart_approximations=args.keep_restart_approximations,

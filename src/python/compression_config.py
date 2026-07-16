@@ -5,27 +5,37 @@ from compression_methods.random_noise import RandomNoiseCompressor
 from compression_methods.neural_network import NeuralNetworkCompressor
 
 
+"""
 OFFLINE_COMPRESSOR_CLASS = PCACompressor
 OFFLINE_COMPRESSOR_PARAMS = {
     "n_components": 8,
     "normalisation": "none",
     "clip_nonnegative": False,
 }
+"""
 
-# ONLINE_COMPRESSOR_CLASS = RandomNoiseCompressor
-# ONLINE_COMPRESSOR_PARAMS = {
-#     "relative_noise_level": 0.01,
-# }
-
-ONLINE_COMPRESSOR_CLASS = NeuralNetworkCompressor
-ONLINE_COMPRESSOR_PARAMS = {
-    "latent_dim": 16,
+OFFLINE_COMPRESSOR_CLASS = NeuralNetworkCompressor
+OFFLINE_COMPRESSOR_PARAMS = {
+    "arch": "periodic_siren_deep_128",
+    "lr": 1e-3,
+    "max_iters": 2000,
+    "batch_size": 2000,
+    "lbfgs_iters": 50,
 }
 
+ONLINE_COMPRESSOR_CLASS = RandomNoiseCompressor
+ONLINE_COMPRESSOR_PARAMS = {
+   "latent_dim": 16,
+}
 
+"""
 def build_offline_compressor():
     return OFFLINE_COMPRESSOR_CLASS(**OFFLINE_COMPRESSOR_PARAMS)
 
+"""
+def build_offline_compressor(**overrides):
+    params = {**OFFLINE_COMPRESSOR_PARAMS, **overrides}
+    return OFFLINE_COMPRESSOR_CLASS(**params)
 
 def build_online_compressor():
     return ONLINE_COMPRESSOR_CLASS(**ONLINE_COMPRESSOR_PARAMS)

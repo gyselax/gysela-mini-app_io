@@ -9,19 +9,14 @@ import time
 from datetime import datetime
 
 import yaml
+import csv
 
 # ------------------------------------------------------------------
 # Compression params / names
 # ------------------------------------------------------------------
-from compression_methods.PCA import PCACompressor
 from evaluate_compression import plot_diags
+from compression_config import build_offline_compressor
 
-COMPRESSOR_CLASS = PCACompressor
-COMPRESSOR_PARAMS = {
-    "n_components": 8,
-    "normalisation": "none",
-    "clip_nonnegative": False,
-}
 
 EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/gys_compress"]
 
@@ -31,6 +26,7 @@ BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
 ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
+COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")
 ACTIVATE_SCRIPT = os.path.join(BASE_DIR, "apps", "io", "activate_deisa_spack_env.sh")
 SCHEFILE = os.path.join(BASE_DIR, "scheduler.json")
 
@@ -104,6 +100,14 @@ def parse_args():
         help="Number of Dask workers to launch per simulation segment (default: 1).",
     )
 
+    parser.add_argument(
+        "--online",
+        action="store_true",
+        help=(
+            "Use online in-situ compression instead of the offline."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -142,6 +146,22 @@ def assert_file_exists(path, description):
     if not os.path.exists(path):
         raise RuntimeError(f"Missing {description}: {path}")
 
+def read_mesh_config(config):
+    """Extracts the grid boundaries from the GYSELA YAML file"""
+    try:
+        mesh = config["SplineMesh"]
+        return {
+            "x_min": float(mesh["x_min"]),
+            "x_max": float(mesh["x_max"]),
+            "y_min": float(mesh["y_min"]),
+            "y_max": float(mesh["y_max"]),
+            "vx_min": float(mesh["vx_min"]),
+            "vx_max": float(mesh["vx_max"]),
+            "vy_min": float(mesh["vy_min"]),
+            "vy_max": float(mesh["vy_max"]),
+        }
+    except KeyError as exc:
+        raise RuntimeError("Missing SplineMesh parameters in the GYSELA YAML template.") from exc
 
 def read_benchmark_config(config):
     try:
@@ -191,10 +211,6 @@ def assert_iterations_are_diagnostic_outputs(iter_total, compression_period, nbs
         )
 
 
-def build_compressor():
-    return COMPRESSOR_CLASS(**COMPRESSOR_PARAMS)
-
-
 def format_param_summary(metrics):
     params = metrics.get("params") or {}
 
@@ -204,8 +220,8 @@ def format_param_summary(metrics):
     return ", ".join(f"{key}={value}" for key, value in params.items())
 
 
-def compress_decompress(input_h5, output_h5, compressed_path):
-    compressor = build_compressor()
+def compress_decompress(input_h5, output_h5, compressed_path, compressor_kwargs):
+    compressor = build_offline_compressor(**compressor_kwargs)
 
     print(
         f"  [{compressor.method_name} Compression] "
@@ -248,6 +264,7 @@ def create_yaml_override(
     fdist_file,
     nbiter,
     iter_offset,
+    compression_period_online=0,
 ):
     with open(base_yaml_path, "r") as f:
         config = yaml.safe_load(f)
@@ -259,6 +276,9 @@ def create_yaml_override(
 
     config.setdefault("Algorithm", {})
     config["Algorithm"]["nbiter"] = nbiter
+
+    config.setdefault("CompressionBenchmark", {})
+    config["CompressionBenchmark"]["compression_period"] = compression_period_online
 
     with open(output_yaml_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
@@ -427,6 +447,7 @@ def run_periodic_compressed_branch(
     run_pdi_yaml,
     iter_total,
     compression_period,
+    mesh_kwargs,
     n_workers=1,
     keep_payloads=False,
     keep_restart_approximations=False,
@@ -442,6 +463,9 @@ def run_periodic_compressed_branch(
     segment_id = 0
     restart_file = "none"
     compression_events = []
+    
+    #tracking the previous payload for warm-starting
+    previous_compressed_payload = None
 
     while current_iter < iter_total:
         remaining_iter = iter_total - current_iter
@@ -517,12 +541,25 @@ def run_periodic_compressed_branch(
         )
 
         raw_restart_size = os.path.getsize(raw_restart)
+        
+        # preparing dynamic arguments for the compressor
+        compressor_kwargs = {**mesh_kwargs}
+        if previous_compressed_payload is not None:
+            compressor_kwargs["warm_start_payload"] = previous_compressed_payload
 
         metrics = compress_decompress(
             input_h5=raw_restart,
             output_h5=approx_restart,
             compressed_path=compressed_payload,
+            compressor_kwargs=compressor_kwargs,
         )
+        
+        # Compression is complete: we can now safely delete the old payload
+        if previous_compressed_payload is not None and not keep_payloads:
+            remove_file_if_exists(
+                previous_compressed_payload,
+                "consumed compressed INR payload",
+            )
 
         approx_restart_size = os.path.getsize(approx_restart) if os.path.exists(approx_restart) else None
 
@@ -557,21 +594,66 @@ def run_periodic_compressed_branch(
                 "compressed_payload_kept": keep_payloads,
             }
         )
-
+        """ 
         if not keep_payloads:
             remove_file_if_exists(
                 compressed_payload,
                 "compressed PCA payload",
             )
-
+        """
         remove_file_if_exists(raw_restart, "consumed raw restart")
 
         restart_file = os.path.abspath(approx_restart)
+        #save the path of the new payload for the next segment
+        previous_compressed_payload = os.path.abspath(compressed_payload)
+        
         segment_id += 1
 
+    if previous_compressed_payload is not None and not keep_payloads:
+        remove_file_if_exists(
+            previous_compressed_payload,
+            "final consumed compressed INR payload",
+        )
+    
     write_compression_manifest(run_dir, compression_events)
 
     return dir_compressed
+
+def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1):
+    dir_online = os.path.join(run_dir, "branch_online_compressed")
+    yaml_online = os.path.join(run_dir, "config_online_compressed.yaml")
+
+    create_yaml_override(
+        SOURCE_GYSELA_YAML,
+        yaml_online,
+        nb_restart=0,
+        fdist_file="none",
+        nbiter=iter_total,
+        iter_offset=0,
+        compression_period_online=compression_period,
+    )
+
+    run_sim_with_diagnostics(
+        branch_name="Online compressed",
+        gysela_yaml=yaml_online,
+        pdi_yaml=run_pdi_yaml,
+        work_dir=dir_online,
+        n_workers=n_workers,
+    )
+
+    events = _collect_online_compression_events(dir_online)
+    write_compression_manifest(run_dir, events)
+
+    return dir_online
+
+
+def _collect_online_compression_events(work_dir):
+    events = []
+    for entry in sorted(os.listdir(work_dir)):
+        if entry.startswith("compression_events_rank") and entry.endswith(".csv"):
+            with open(os.path.join(work_dir, entry), newline="") as fh:
+                events.extend(dict(row) for row in csv.DictReader(fh))
+    return events
 
 
 def compare_results(run_dir):
@@ -595,6 +677,8 @@ def main():
     assert_file_exists(SOURCE_GYSELA_YAML, "base GYSELA input template")
     assert_file_exists(SOURCE_PDI_YAML, "base PDI input template")
     assert_file_exists(ANALYTICS_SCRIPT, "in-situ diagnostics script")
+    if args.online:
+        assert_file_exists(COMPRESSION_DIAGNOSTICS_SCRIPT, "online in-situ compression script")
 
     run_dir = create_or_select_run_dir(
         requested_run_dir=args.run_dir,
@@ -611,6 +695,7 @@ def main():
 
     iter_total, compression_period = read_benchmark_config(base_cfg)
     nbstep_diag = compute_diagnostic_step(base_cfg)
+    mesh_kwargs = read_mesh_config(base_cfg)
 
     assert_iterations_are_diagnostic_outputs(
         iter_total=iter_total,
@@ -632,16 +717,26 @@ def main():
             n_workers=args.dask_workers,
         )
 
-    run_periodic_compressed_branch(
-        run_dir=run_dir,
-        run_pdi_yaml=run_pdi_yaml,
-        iter_total=iter_total,
-        compression_period=compression_period,
-        n_workers=args.dask_workers,
-        keep_payloads=args.keep_payloads,
-        keep_restart_approximations=args.keep_restart_approximations,
-        keep_segment_configs=args.keep_segment_configs,
-    )
+    if args.online:
+        run_online_compressed_branch(
+            run_dir=run_dir,
+            run_pdi_yaml=run_pdi_yaml,
+            iter_total=iter_total,
+            compression_period=compression_period,
+            n_workers=args.dask_workers,
+        )
+    else:
+        run_periodic_compressed_branch(
+            run_dir=run_dir,
+            run_pdi_yaml=run_pdi_yaml,
+            iter_total=iter_total,
+            compression_period=compression_period,
+            mesh_kwargs=mesh_kwargs,
+            n_workers=args.dask_workers,
+            keep_payloads=args.keep_payloads,
+            keep_restart_approximations=args.keep_restart_approximations,
+            keep_segment_configs=args.keep_segment_configs,
+        )
 
     if not args.keep_pdi_copy:
         remove_file_if_exists(run_pdi_yaml, "copied PDI config")

@@ -21,7 +21,12 @@ dependencies = [
     "tqdm",
     "iops-benchmark",
     "iops-benchmark[bayesian]",
-    "rich"
+    "rich",
+    "flax>=0.12.7",
+    "optax>=0.2.8",
+    "jax>=0.4.28",
+    "equinox>=0.1.3",
+    "scimba @ git+https://gitlab.com/scimba/scimba.git",
 ]
 
 [project.optional-dependencies]

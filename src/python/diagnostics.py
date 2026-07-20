@@ -9,6 +9,8 @@ import numpy as np
 from deisa.dask import Deisa
 from distributed import get_client
 
+import compression_diagnostics
+
 _MEASURE_CFG = None
 
 
@@ -76,7 +78,7 @@ class Config:
 
 
 def to_dask(array):
-    return array if isinstance(array, da.Array) else da.from_array(array)
+    return array if isinstance(array, da.Array) else da.from_array(array, name=False)
 
 
 def init_measure_config(x, y, vx, vy, data_dir="."):
@@ -115,7 +117,7 @@ def poisson_fft(n, grid):
     mask = np.ones_like(k2)
     mask[0, 0] = 0.0            # gauge: phi_hat(0,0) = 0
 
-    phi_hat = rho_hat / da.from_array(k2) * da.from_array(mask)
+    phi_hat = rho_hat / to_dask(k2) * to_dask(mask)
     return da.real(da.fft.ifft2(phi_hat))
 
 
@@ -129,8 +131,8 @@ def electric_field_from_potential(phi, grid):
     """
     phi_hat = da.fft.fft2(to_dask(phi))
     KX, KY = np.meshgrid(grid.kx, grid.ky, indexing="ij")
-    Ex = da.real(da.fft.ifft2(-1j * da.from_array(KX) * phi_hat))
-    Ey = da.real(da.fft.ifft2(-1j * da.from_array(KY) * phi_hat))
+    Ex = da.real(da.fft.ifft2(-1j * to_dask(KX) * phi_hat))
+    Ey = da.real(da.fft.ifft2(-1j * to_dask(KY) * phi_hat))
     return da.stack([Ex, Ey], axis=-1)
 
 
@@ -191,6 +193,14 @@ def measure(cfg, f, Efield, it, t_actual):
 
 deisa = Deisa()
 
+@deisa.register("fdistribu_offline")
+def compute_offline_compression(fdistribu_chunks):
+    timestep = int(fdistribu_chunks[0].t)
+    fdistribu_global = np.array(fdistribu_chunks[0])
+
+    compression_diagnostics.run_offline_compression_on_global_array(fdistribu_global, timestep)
+
+    deisa.set("fdistribu_offline_done", True, timestep=timestep)
 
 @deisa.register("fdistribu")
 def compute_diagnostics(fdistribu_chunks):

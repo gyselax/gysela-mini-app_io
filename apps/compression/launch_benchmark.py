@@ -9,19 +9,13 @@ import time
 from datetime import datetime
 
 import yaml
+import csv
 
 # ------------------------------------------------------------------
 # Compression params / names
 # ------------------------------------------------------------------
-from compression_methods.PCA import PCACompressor
 from evaluate_compression import plot_diags
 
-COMPRESSOR_CLASS = PCACompressor
-COMPRESSOR_PARAMS = {
-    "n_components": 8,
-    "normalisation": "none",
-    "clip_nonnegative": False,
-}
 
 EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/gys_compress"]
 
@@ -31,6 +25,7 @@ BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
 ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
+COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")
 ACTIVATE_SCRIPT = os.path.join(BASE_DIR, "apps", "io", "activate_deisa_spack_env.sh")
 SCHEFILE = os.path.join(BASE_DIR, "scheduler.json")
 
@@ -60,35 +55,6 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--keep-payloads",
-        action="store_true",
-        help=(
-            "Keep restart_iter_XXXXX_compressed.npz payload files. "
-            "By default, they are deleted after their size and metrics are "
-            "stored in compression_events.yaml."
-        ),
-    )
-
-    parser.add_argument(
-        "--keep-restart-approximations",
-        action="store_true",
-        help=(
-            "Keep restart_iter_XXXXX_approx.h5 files after they have been "
-            "used for restart. By default, each approximation is deleted after "
-            "the segment that consumes it has finished."
-        ),
-    )
-
-    parser.add_argument(
-        "--keep-segment-configs",
-        action="store_true",
-        help=(
-            "Keep config_compressed_segment_XXX.yaml files. "
-            "By default, segment configs are removed after each segment run."
-        ),
-    )
-
-    parser.add_argument(
         "--keep-pdi-copy",
         action="store_true",
         help=(
@@ -102,6 +68,14 @@ def parse_args():
         type=int,
         default=1,
         help="Number of Dask workers to launch per simulation segment (default: 1).",
+    )
+
+    parser.add_argument(
+        "--online",
+        action="store_true",
+        help=(
+            "Use online in-situ compression instead of the offline."
+        ),
     )
 
     return parser.parse_args()
@@ -142,6 +116,22 @@ def assert_file_exists(path, description):
     if not os.path.exists(path):
         raise RuntimeError(f"Missing {description}: {path}")
 
+def read_mesh_config(config):
+    """Extracts the grid boundaries from the GYSELA YAML file"""
+    try:
+        mesh = config["SplineMesh"]
+        return {
+            "x_min": float(mesh["x_min"]),
+            "x_max": float(mesh["x_max"]),
+            "y_min": float(mesh["y_min"]),
+            "y_max": float(mesh["y_max"]),
+            "vx_min": float(mesh["vx_min"]),
+            "vx_max": float(mesh["vx_max"]),
+            "vy_min": float(mesh["vy_min"]),
+            "vy_max": float(mesh["vy_max"]),
+        }
+    except KeyError as exc:
+        raise RuntimeError("Missing SplineMesh parameters in the GYSELA YAML template.") from exc
 
 def read_benchmark_config(config):
     try:
@@ -191,10 +181,6 @@ def assert_iterations_are_diagnostic_outputs(iter_total, compression_period, nbs
         )
 
 
-def build_compressor():
-    return COMPRESSOR_CLASS(**COMPRESSOR_PARAMS)
-
-
 def format_param_summary(metrics):
     params = metrics.get("params") or {}
 
@@ -204,43 +190,6 @@ def format_param_summary(metrics):
     return ", ".join(f"{key}={value}" for key, value in params.items())
 
 
-def compress_decompress(input_h5, output_h5, compressed_path):
-    compressor = build_compressor()
-
-    print(
-        f"  [{compressor.method_name} Compression] "
-        f"{os.path.basename(input_h5)} -> {os.path.basename(output_h5)}"
-    )
-    print(f"  [Parameters] {compressor.printable_name()}")
-    print(f"  [Compressed Payload] {os.path.basename(compressed_path)}")
-
-    metrics = compressor.compress_decompress_h5(
-        input_h5=input_h5,
-        output_h5=output_h5,
-        compressed_path=compressed_path,
-    )
-
-    print(f"  Method = {metrics['method_name']} ({format_param_summary(metrics)})")
-
-    explained = metrics.get("explained_variance_ratio_sum")
-    if explained is not None:
-        print(f"  Explained variance ratio sum = {explained:.12e}")
-
-    print("  Relative L2 reconstruction error = " f"{metrics['relative_l2_error']:.12e}")
-    print("  Max abs reconstruction error = " f"{metrics['max_abs_error']:.12e}")
-
-    if metrics.get("mean_abs_error") is not None:
-        print("  Mean abs reconstruction error = " f"{metrics['mean_abs_error']:.12e}")
-
-    if metrics.get("rmse") is not None:
-        print("  RMSE reconstruction error = " f"{metrics['rmse']:.12e}")
-
-    if metrics["compression_ratio"] is not None:
-        print(f"  Compression ratio = {metrics['compression_ratio']:.6f}x")
-
-    return metrics
-
-
 def create_yaml_override(
     base_yaml_path,
     output_yaml_path,
@@ -248,6 +197,8 @@ def create_yaml_override(
     fdist_file,
     nbiter,
     iter_offset,
+    compression_period=0,
+    compression_mode=0,
 ):
     with open(base_yaml_path, "r") as f:
         config = yaml.safe_load(f)
@@ -259,6 +210,10 @@ def create_yaml_override(
 
     config.setdefault("Algorithm", {})
     config["Algorithm"]["nbiter"] = nbiter
+
+    config.setdefault("CompressionBenchmark", {})
+    config["CompressionBenchmark"]["compression_period"] = compression_period
+    config["CompressionBenchmark"]["compression_mode"] = compression_mode
 
     with open(output_yaml_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
@@ -338,18 +293,35 @@ def stop_dask(sch_proc, worker_proc):
             except ProcessLookupError:
                 pass
 
+def print_branch_banner(branch_name):
+    label = f" {branch_name} "
+    width = max(70, len(label) + 4)
+    bar = "=" * (width - 2)
+    cyan = "\033[96m"
+    bold = "\033[1m"
+    reset = "\033[0m"
+    print()
+    print(f"{cyan}{bold}+{bar}+{reset}")
+    print(f"{cyan}{bold}|{label.center(width - 2)}|{reset}")
+    print(f"{cyan}{bold}+{bar}+{reset}")
+    print()
 
-def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1):
+
+def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1, extra_env=None):
     """Start Dask, run simulation and diagnostics in parallel, stop Dask.
 
     Both the simulation and diagnostics.py run with work_dir as CWD so that
     HDF5 snapshots and diagnostics.csv are written there.
     """
-    print(f"\n--- Running: {branch_name} ---")
+    print_branch_banner(branch_name)
     os.makedirs(work_dir, exist_ok=True)
 
     deisa_env = load_deisa_env()
     sch_proc, worker_proc, deisa_env = start_dask(deisa_env, n_workers)
+
+    if extra_env:
+        deisa_env = dict(deisa_env)
+        deisa_env.update({k: str(v) for k, v in extra_env.items()})
 
     try:
         exec_path = os.path.abspath(EXEC_CMD[-1])
@@ -422,156 +394,82 @@ def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
     return dir_baseline
 
 
-def run_periodic_compressed_branch(
-    run_dir,
-    run_pdi_yaml,
-    iter_total,
-    compression_period,
-    n_workers=1,
-    keep_payloads=False,
-    keep_restart_approximations=False,
-    keep_segment_configs=False,
-):
-    dir_compressed = os.path.join(run_dir, "branch_compressed")
-    restart_dir = os.path.join(run_dir, "periodic_restarts")
+def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, mesh_kwargs=None, n_workers=1):
+    dir_offline = os.path.join(run_dir, "branch_offline_compressed")
+    yaml_offline = os.path.join(run_dir, "config_offline_compressed.yaml")
 
-    os.makedirs(dir_compressed, exist_ok=True)
-    os.makedirs(restart_dir, exist_ok=True)
+    create_yaml_override(
+        SOURCE_GYSELA_YAML,
+        yaml_offline,
+        nb_restart=0,
+        fdist_file="none",
+        nbiter=iter_total,
+        iter_offset=0,
+        compression_period=compression_period,
+        compression_mode=2,
+    )
 
-    current_iter = 0
-    segment_id = 0
-    restart_file = "none"
-    compression_events = []
+    extra_env = {"COMPRESSION_MESH_KWARGS": json.dumps(mesh_kwargs)} if mesh_kwargs else None
 
-    while current_iter < iter_total:
-        remaining_iter = iter_total - current_iter
-        segment_nbiter = min(compression_period, remaining_iter)
-        next_iter = current_iter + segment_nbiter
+    run_sim_with_diagnostics(
+        branch_name="Offline compressed",
+        gysela_yaml=yaml_offline,
+        pdi_yaml=run_pdi_yaml,
+        work_dir=dir_offline,
+        n_workers=n_workers,
+        extra_env=extra_env,
+    )
 
-        yaml_segment = os.path.join(
-            run_dir,
-            f"config_compressed_segment_{segment_id:03d}.yaml",
-        )
+    events = _collect_offline_compression_events(dir_offline)
+    write_compression_manifest(run_dir, events)
 
-        nb_restart = 0 if segment_id == 0 else segment_id
-        restart_file_used_by_segment = restart_file
+    return dir_offline
 
-        create_yaml_override(
-            SOURCE_GYSELA_YAML,
-            yaml_segment,
-            nb_restart=nb_restart,
-            fdist_file=restart_file,
-            nbiter=segment_nbiter,
-            iter_offset=current_iter,
-        )
 
-        run_sim_with_diagnostics(
-            branch_name=(f"Compressed segment {segment_id} ({current_iter} -> {next_iter})"),
-            gysela_yaml=yaml_segment,
-            pdi_yaml=run_pdi_yaml,
-            work_dir=dir_compressed,
-            n_workers=n_workers,
-        )
+def _collect_offline_compression_events(work_dir):
+    csv_path = os.path.join(work_dir, "compression_events_offline.csv")
+    if not os.path.exists(csv_path):
+        return []
+    with open(csv_path, newline="") as fh:
+        return [dict(row) for row in csv.DictReader(fh)]
 
-        if nb_restart > 0 and not keep_restart_approximations:
-            remove_file_if_exists(
-                restart_file_used_by_segment,
-                "consumed restart approximation",
-            )
 
-        if not keep_segment_configs:
-            remove_file_if_exists(
-                yaml_segment,
-                "temporary compressed-segment config",
-            )
+def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1):
+    dir_online = os.path.join(run_dir, "branch_online_compressed")
+    yaml_online = os.path.join(run_dir, "config_online_compressed.yaml")
 
-        current_iter = next_iter
+    create_yaml_override(
+        SOURCE_GYSELA_YAML,
+        yaml_online,
+        nb_restart=0,
+        fdist_file="none",
+        nbiter=iter_total,
+        iter_offset=0,
+        compression_period=compression_period,
+        compression_mode=1,
+    )
 
-        if current_iter >= iter_total:
-            break
+    run_sim_with_diagnostics(
+        branch_name="Online compressed",
+        gysela_yaml=yaml_online,
+        pdi_yaml=run_pdi_yaml,
+        work_dir=dir_online,
+        n_workers=n_workers,
+    )
 
-        if current_iter % compression_period != 0:
-            raise RuntimeError(
-                f"Cannot compress at iteration {current_iter}: "
-                f"not a multiple of compression_period={compression_period}."
-            )
+    events = _collect_online_compression_events(dir_online)
+    write_compression_manifest(run_dir, events)
 
-        raw_restart = os.path.join(
-            dir_compressed,
-            f"GYSELALIBXX_{current_iter:05d}.h5",
-        )
+    return dir_online
 
-        approx_restart = os.path.join(
-            restart_dir,
-            f"restart_iter_{current_iter:05d}_approx.h5",
-        )
 
-        compressed_payload = os.path.join(
-            restart_dir,
-            f"restart_iter_{current_iter:05d}_compressed.npz",
-        )
-
-        assert_file_exists(
-            raw_restart,
-            f"restart source file at iteration {current_iter}",
-        )
-
-        raw_restart_size = os.path.getsize(raw_restart)
-
-        metrics = compress_decompress(
-            input_h5=raw_restart,
-            output_h5=approx_restart,
-            compressed_path=compressed_payload,
-        )
-
-        approx_restart_size = os.path.getsize(approx_restart) if os.path.exists(approx_restart) else None
-
-        compressed_payload_size = os.path.getsize(compressed_payload) if os.path.exists(compressed_payload) else None
-
-        compression_events.append(
-            {
-                "segment_id": segment_id,
-                "iteration": current_iter,
-                "file_index": current_iter,
-                "branch_restart": os.path.relpath(raw_restart, run_dir),
-                "approx_restart": os.path.relpath(approx_restart, run_dir),
-                "compressed_payload": (os.path.relpath(compressed_payload, run_dir) if keep_payloads else None),
-                "method_name": metrics.get("method_name"),
-                "param_names": metrics.get("param_names", []),
-                "params": metrics.get("params", {}),
-                "n_components": metrics.get("param_n_components"),
-                "raw_restart_size": raw_restart_size,
-                "approx_restart_size": approx_restart_size,
-                "compressed_payload_size": compressed_payload_size,
-                "explained_variance_ratio_sum": metrics.get("explained_variance_ratio_sum"),
-                "relative_l2_error": float(metrics["relative_l2_error"]),
-                "max_abs_error": float(metrics["max_abs_error"]),
-                "mean_abs_error": float(metrics["mean_abs_error"]),
-                "rmse": float(metrics["rmse"]),
-                "compression_seconds": metrics.get("compression_seconds"),
-                "decompression_seconds": metrics.get("decompression_seconds"),
-                "compression_ratio": (
-                    None if metrics["compression_ratio"] is None else float(metrics["compression_ratio"])
-                ),
-                "approx_restart_kept": keep_restart_approximations,
-                "compressed_payload_kept": keep_payloads,
-            }
-        )
-
-        if not keep_payloads:
-            remove_file_if_exists(
-                compressed_payload,
-                "compressed PCA payload",
-            )
-
-        remove_file_if_exists(raw_restart, "consumed raw restart")
-
-        restart_file = os.path.abspath(approx_restart)
-        segment_id += 1
-
-    write_compression_manifest(run_dir, compression_events)
-
-    return dir_compressed
+def _collect_online_compression_events(work_dir):
+    events = []
+    for entry in sorted(os.listdir(work_dir)):
+        if entry.startswith("compression_events_rank") and entry.endswith(".csv"):
+            with open(os.path.join(work_dir, entry), newline="") as fh:
+                events.extend(dict(row) for row in csv.DictReader(fh))
+    return events
 
 
 def compare_results(run_dir):
@@ -595,6 +493,8 @@ def main():
     assert_file_exists(SOURCE_GYSELA_YAML, "base GYSELA input template")
     assert_file_exists(SOURCE_PDI_YAML, "base PDI input template")
     assert_file_exists(ANALYTICS_SCRIPT, "in-situ diagnostics script")
+    if args.online:
+        assert_file_exists(COMPRESSION_DIAGNOSTICS_SCRIPT, "online in-situ compression script")
 
     run_dir = create_or_select_run_dir(
         requested_run_dir=args.run_dir,
@@ -611,6 +511,7 @@ def main():
 
     iter_total, compression_period = read_benchmark_config(base_cfg)
     nbstep_diag = compute_diagnostic_step(base_cfg)
+    mesh_kwargs = read_mesh_config(base_cfg)
 
     assert_iterations_are_diagnostic_outputs(
         iter_total=iter_total,
@@ -632,21 +533,26 @@ def main():
             n_workers=args.dask_workers,
         )
 
-    run_periodic_compressed_branch(
-        run_dir=run_dir,
-        run_pdi_yaml=run_pdi_yaml,
-        iter_total=iter_total,
-        compression_period=compression_period,
-        n_workers=args.dask_workers,
-        keep_payloads=args.keep_payloads,
-        keep_restart_approximations=args.keep_restart_approximations,
-        keep_segment_configs=args.keep_segment_configs,
-    )
+    if args.online:
+        run_online_compressed_branch(
+            run_dir=run_dir,
+            run_pdi_yaml=run_pdi_yaml,
+            iter_total=iter_total,
+            compression_period=compression_period,
+            n_workers=args.dask_workers,
+        )
+    else:
+        run_offline_compressed_branch(
+            run_dir=run_dir,
+            run_pdi_yaml=run_pdi_yaml,
+            iter_total=iter_total,
+            compression_period=compression_period,
+            mesh_kwargs=mesh_kwargs,
+            n_workers=args.dask_workers,
+        )
 
     if not args.keep_pdi_copy:
         remove_file_if_exists(run_pdi_yaml, "copied PDI config")
-
-    
 
     print(f"\nWorkflow complete. All files are in: {run_dir}")
     return run_dir

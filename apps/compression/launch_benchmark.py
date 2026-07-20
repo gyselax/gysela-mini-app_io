@@ -296,14 +296,14 @@ def stop_dask(sch_proc, worker_proc):
 def print_branch_banner(branch_name):
     label = f" {branch_name} "
     width = max(70, len(label) + 4)
-    bar = "═" * (width - 2)
+    bar = "=" * (width - 2)
     cyan = "\033[96m"
     bold = "\033[1m"
     reset = "\033[0m"
     print()
-    print(f"{cyan}{bold}╔{bar}╗{reset}")
-    print(f"{cyan}{bold}║{label.center(width - 2)}║{reset}")
-    print(f"{cyan}{bold}╚{bar}╝{reset}")
+    print(f"{cyan}{bold}+{bar}+{reset}")
+    print(f"{cyan}{bold}|{label.center(width - 2)}|{reset}")
+    print(f"{cyan}{bold}+{bar}+{reset}")
     print()
 
 

@@ -15,7 +15,6 @@ import csv
 # Compression params / names
 # ------------------------------------------------------------------
 from evaluate_compression import plot_diags
-from compression_config import build_offline_compressor
 
 
 EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/gys_compress"]
@@ -191,43 +190,6 @@ def format_param_summary(metrics):
     return ", ".join(f"{key}={value}" for key, value in params.items())
 
 
-def compress_decompress(input_h5, output_h5, compressed_path, compressor_kwargs):
-    compressor = build_offline_compressor(**compressor_kwargs)
-
-    print(
-        f"  [{compressor.method_name} Compression] "
-        f"{os.path.basename(input_h5)} -> {os.path.basename(output_h5)}"
-    )
-    print(f"  [Parameters] {compressor.printable_name()}")
-    print(f"  [Compressed Payload] {os.path.basename(compressed_path)}")
-
-    metrics = compressor.compress_decompress_h5(
-        input_h5=input_h5,
-        output_h5=output_h5,
-        compressed_path=compressed_path,
-    )
-
-    print(f"  Method = {metrics['method_name']} ({format_param_summary(metrics)})")
-
-    explained = metrics.get("explained_variance_ratio_sum")
-    if explained is not None:
-        print(f"  Explained variance ratio sum = {explained:.12e}")
-
-    print("  Relative L2 reconstruction error = " f"{metrics['relative_l2_error']:.12e}")
-    print("  Max abs reconstruction error = " f"{metrics['max_abs_error']:.12e}")
-
-    if metrics.get("mean_abs_error") is not None:
-        print("  Mean abs reconstruction error = " f"{metrics['mean_abs_error']:.12e}")
-
-    if metrics.get("rmse") is not None:
-        print("  RMSE reconstruction error = " f"{metrics['rmse']:.12e}")
-
-    if metrics["compression_ratio"] is not None:
-        print(f"  Compression ratio = {metrics['compression_ratio']:.6f}x")
-
-    return metrics
-
-
 def create_yaml_override(
     base_yaml_path,
     output_yaml_path,
@@ -345,7 +307,7 @@ def print_branch_banner(branch_name):
     print()
 
 
-def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1):
+def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1, extra_env=None):
     """Start Dask, run simulation and diagnostics in parallel, stop Dask.
 
     Both the simulation and diagnostics.py run with work_dir as CWD so that
@@ -356,6 +318,10 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
 
     deisa_env = load_deisa_env()
     sch_proc, worker_proc, deisa_env = start_dask(deisa_env, n_workers)
+
+    if extra_env:
+        deisa_env = dict(deisa_env)
+        deisa_env.update({k: str(v) for k, v in extra_env.items()})
 
     try:
         exec_path = os.path.abspath(EXEC_CMD[-1])
@@ -428,7 +394,7 @@ def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
     return dir_baseline
 
 
-def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1):
+def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, mesh_kwargs=None, n_workers=1):
     dir_offline = os.path.join(run_dir, "branch_offline_compressed")
     yaml_offline = os.path.join(run_dir, "config_offline_compressed.yaml")
 
@@ -443,12 +409,15 @@ def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression
         compression_mode=2,
     )
 
+    extra_env = {"COMPRESSION_MESH_KWARGS": json.dumps(mesh_kwargs)} if mesh_kwargs else None
+
     run_sim_with_diagnostics(
         branch_name="Offline compressed",
         gysela_yaml=yaml_offline,
         pdi_yaml=run_pdi_yaml,
         work_dir=dir_offline,
         n_workers=n_workers,
+        extra_env=extra_env,
     )
 
     events = _collect_offline_compression_events(dir_offline)

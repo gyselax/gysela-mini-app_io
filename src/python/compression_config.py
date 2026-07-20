@@ -1,5 +1,6 @@
 """Compressor selection for the offline and online compression pipelines."""
 
+import inspect
 from compression_methods.PCA import PCACompressor
 from compression_methods.random_noise import RandomNoiseCompressor
 from compression_methods.neural_network import NeuralNetworkCompressor
@@ -18,7 +19,7 @@ OFFLINE_COMPRESSOR_CLASS = NeuralNetworkCompressor
 OFFLINE_COMPRESSOR_PARAMS = {
     "arch": "periodic_siren_deep_128",
     "lr": 1e-3,
-    "max_iters": 2000,
+    "max_iters": 500,
     "batch_size": 2000,
     "lbfgs_iters": 50,
 }
@@ -28,13 +29,10 @@ ONLINE_COMPRESSOR_PARAMS = {
    "relative_noise_level": 0.01,
 }
 
-"""
-def build_offline_compressor():
-    return OFFLINE_COMPRESSOR_CLASS(**OFFLINE_COMPRESSOR_PARAMS)
-
-"""
 def build_offline_compressor(**overrides):
-    params = {**OFFLINE_COMPRESSOR_PARAMS, **overrides}
+    accepted = set(inspect.signature(OFFLINE_COMPRESSOR_CLASS.__init__).parameters) - {"self"}
+    filtered = {k: v for k, v in overrides.items() if k in accepted}
+    params = {**OFFLINE_COMPRESSOR_PARAMS, **filtered}
     return OFFLINE_COMPRESSOR_CLASS(**params)
 
 def build_online_compressor():

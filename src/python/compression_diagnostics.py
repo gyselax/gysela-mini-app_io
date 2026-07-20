@@ -1,7 +1,9 @@
 """Compression logic shared by the rank-local online path and the bridge-based offline path:
 builds compressors, runs compress/decompress round trips, and logs results to CSV."""
 
+import os
 import csv
+import json
 import h5py
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +31,8 @@ def get_compression_config(data_dir="."):
 def get_offline_compression_config(data_dir="."):
     global _OFFLINE_COMPRESSION_CFG
     if _OFFLINE_COMPRESSION_CFG is None:
-        _OFFLINE_COMPRESSION_CFG = CompressionConfig(Path(data_dir), build_offline_compressor())
+        mesh_kwargs = json.loads(os.environ.get("COMPRESSION_MESH_KWARGS", "{}"))
+        _OFFLINE_COMPRESSION_CFG = CompressionConfig(Path(data_dir), build_offline_compressor(**mesh_kwargs))
     return _OFFLINE_COMPRESSION_CFG
 
 

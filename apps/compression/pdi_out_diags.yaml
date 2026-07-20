@@ -82,6 +82,7 @@ plugins:
           from deisa.dask import Bridge
           import compression_diagnostics
           comm = MPI.COMM_WORLD
+          rank = comm.Get_rank()
       InitBridge:
         with: { global_fdistribu_extents: $global_fdistribu_extents,
                 local_fdistribu_extents: $local_fdistribu_extents,
@@ -116,7 +117,9 @@ plugins:
 
           if int(nb_step_compression) > 0 and timestep % int(nb_step_compression) == 0:
             compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
-          print(f"--------------------------timestep: {timestep}")
+          if timestep % 10 == 0:
+            if rank == 0:
+              print(f"--------------------------timestep: {timestep}")
           if timestep % int(nbstep_diag) == 0:
             # ===== will no longer be needed once xarrays can be sent through the bridge ======
             if comm.Get_rank() == 0:

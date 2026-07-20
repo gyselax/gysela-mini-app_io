@@ -144,7 +144,7 @@ plugins:
                     )
                   time.sleep(0.05)
               pdi.event("read_compressed_fdistribu")
-
+          print(f"--------------------------timestep: {timestep}")
           if timestep % int(nbstep_diag) == 0:
             # ===== will no longer be needed once xarrays can be sent through the bridge ======
             if comm.Get_rank() == 0:

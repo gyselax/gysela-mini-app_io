@@ -117,6 +117,22 @@ def assert_file_exists(path, description):
     if not os.path.exists(path):
         raise RuntimeError(f"Missing {description}: {path}")
 
+def read_mesh_config(config):
+    """Extracts the grid boundaries from the GYSELA YAML file"""
+    try:
+        mesh = config["SplineMesh"]
+        return {
+            "x_min": float(mesh["x_min"]),
+            "x_max": float(mesh["x_max"]),
+            "y_min": float(mesh["y_min"]),
+            "y_max": float(mesh["y_max"]),
+            "vx_min": float(mesh["vx_min"]),
+            "vx_max": float(mesh["vx_max"]),
+            "vy_min": float(mesh["vy_min"]),
+            "vy_max": float(mesh["vy_max"]),
+        }
+    except KeyError as exc:
+        raise RuntimeError("Missing SplineMesh parameters in the GYSELA YAML template.") from exc
 
 def read_benchmark_config(config):
     try:
@@ -175,8 +191,8 @@ def format_param_summary(metrics):
     return ", ".join(f"{key}={value}" for key, value in params.items())
 
 
-def compress_decompress(input_h5, output_h5, compressed_path):
-    compressor = build_offline_compressor()
+def compress_decompress(input_h5, output_h5, compressed_path, compressor_kwargs):
+    compressor = build_offline_compressor(**compressor_kwargs)
 
     print(
         f"  [{compressor.method_name} Compression] "
@@ -526,6 +542,7 @@ def main():
 
     iter_total, compression_period = read_benchmark_config(base_cfg)
     nbstep_diag = compute_diagnostic_step(base_cfg)
+    mesh_kwargs = read_mesh_config(base_cfg)
 
     assert_iterations_are_diagnostic_outputs(
         iter_total=iter_total,
@@ -561,6 +578,7 @@ def main():
             run_pdi_yaml=run_pdi_yaml,
             iter_total=iter_total,
             compression_period=compression_period,
+            mesh_kwargs=mesh_kwargs,
             n_workers=args.dask_workers,
         )
 

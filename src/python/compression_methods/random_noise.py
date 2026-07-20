@@ -15,7 +15,7 @@ class RandomNoiseCompressor:
     def printable_name(self):
         return f"{self.method_name}(relative_noise_level={self.relative_noise_level})"
 
-    def compress_decompress_array(self, array):
+    def compress_decompress_array(self, array, rank=None):
         t0 = time.perf_counter()
         scale = self.relative_noise_level * np.abs(array).mean()
         noise = self._rng.normal(loc=0.0, scale=scale, size=array.shape)

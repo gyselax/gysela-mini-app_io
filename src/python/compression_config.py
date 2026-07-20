@@ -25,7 +25,7 @@ OFFLINE_COMPRESSOR_PARAMS = {
 
 ONLINE_COMPRESSOR_CLASS = RandomNoiseCompressor
 ONLINE_COMPRESSOR_PARAMS = {
-   "latent_dim": 16,
+   "relative_noise_level": 0.01,
 }
 
 """

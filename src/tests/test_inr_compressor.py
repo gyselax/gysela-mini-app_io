@@ -64,7 +64,7 @@ def test_inr_plumbing():
         f"Model error : expected {n_species} models, got {len(compressed_dict['models'])}"
     print("[OK] The correct number of models has been generated.")
     
-    #verification of the decreasing of th loss 
+    #verification of the decreasing of the loss 
     metrics = compressor.get_extra_metrics()
     final_losses = metrics["final_loss_per_species"]
     assert final_losses is not None and len(final_losses) == n_species, "The losses were not properly recorded."

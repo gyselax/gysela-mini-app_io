@@ -9,6 +9,8 @@ import numpy as np
 from deisa.dask import Deisa
 from distributed import get_client
 
+import compression_diagnostics
+
 _MEASURE_CFG = None
 
 
@@ -191,6 +193,14 @@ def measure(cfg, f, Efield, it, t_actual):
 
 deisa = Deisa()
 
+@deisa.register("fdistribu_offline")
+def compute_offline_compression(fdistribu_chunks):
+    timestep = int(fdistribu_chunks[0].t)
+    fdistribu_global = np.array(fdistribu_chunks[0])
+
+    compression_diagnostics.run_offline_compression_on_global_array(fdistribu_global, timestep)
+
+    deisa.set("fdistribu_offline_done", True, timestep=timestep)
 
 @deisa.register("fdistribu")
 def compute_diagnostics(fdistribu_chunks):

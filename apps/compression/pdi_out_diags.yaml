@@ -12,6 +12,7 @@ metadata:
   absolute_time: double
   nbstep_diag: int
   nb_step_compression: int
+  compression_mode: int
   iter_saved : int
   MeshX_extents: { type: array, subtype: int64, size: 1 }
   MeshX:
@@ -77,10 +78,12 @@ plugins:
       Init:
         with: {}
         exec: |
+          import time
           import numpy as np
           from mpi4py import MPI
           from deisa.dask import Bridge
           import compression_diagnostics
+          import pdi
           comm = MPI.COMM_WORLD
           rank = comm.Get_rank()
       InitBridge:
@@ -98,6 +101,11 @@ plugins:
                   'chunk_shape':    local_shape,
                   'chunk_position': chunk_pos,
               },
+              'fdistribu_offline': {
+                  'global_shape':   global_shape,
+                  'chunk_shape':    local_shape,
+                  'chunk_position': chunk_pos,
+              },
           }
           bridge = Bridge(comm, arrays_metadata)
       iteration:
@@ -108,6 +116,7 @@ plugins:
           iter_offset: $iter_offset
           nbstep_diag: $nbstep_diag
           nb_step_compression: $nb_step_compression
+          compression_mode: $compression_mode
           MeshX: $MeshX
           MeshY: $MeshY
           MeshVx: $MeshVx
@@ -115,8 +124,27 @@ plugins:
         exec: |
           timestep = int(it) + int(iter_offset)
 
-          if int(nb_step_compression) > 0 and timestep % int(nb_step_compression) == 0:
-            compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+          if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
+            # Online Compression
+            if int(compression_mode) == 1:
+              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+            # Offline Compression
+            elif int(compression_mode) == 2:
+              bridge.send("fdistribu_offline", fdistribu, timestep)
+              deadline = time.time() + 300.0
+              done = False
+              while not done:
+                try:
+                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
+                except KeyError:
+                  done = False
+                if not done:
+                  if time.time() > deadline:
+                    raise RuntimeError(
+                      f"Timed out waiting for offline compression feedback at iter {timestep}"
+                    )
+                  time.sleep(0.05)
+              pdi.event("read_compressed_fdistribu")
           if timestep % 10 == 0:
             if rank == 0:
               print(f"--------------------------timestep: {timestep}")
@@ -142,6 +170,7 @@ plugins:
           t: $absolute_time
           iter_offset: $iter_offset
           nb_step_compression: $nb_step_compression
+          compression_mode: $compression_mode
           MeshX: $MeshX
           MeshY: $MeshY
           MeshVx: $MeshVx
@@ -149,8 +178,27 @@ plugins:
         exec: |
           timestep = int(it) + int(iter_offset)
 
-          if int(nb_step_compression) > 0 and timestep % int(nb_step_compression) == 0:
-            compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+          if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
+            # Online Compression
+            if int(compression_mode) == 1:
+              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+            # Offline Compression
+            elif int(compression_mode) == 2:
+              bridge.send("fdistribu_offline", fdistribu, timestep)
+              deadline = time.time() + 60.0
+              done = False
+              while not done:
+                try:
+                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
+                except KeyError:
+                  done = False
+                if not done:
+                  if time.time() > deadline:
+                    raise RuntimeError(
+                      f"Timed out waiting for offline compression feedback at iter {timestep}"
+                    )
+                  time.sleep(0.05)
+              pdi.event("read_compressed_fdistribu")
 
           # ===== will no longer be needed once xarrays can be sent through the bridge ======
           if comm.Get_rank() == 0:
@@ -199,6 +247,19 @@ plugins:
           dataset_selection:
             size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
             start: ['$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]']
+    - file: 'GYSELALIBXX_compressed_${iter_saved:05}.h5'
+      communicator: $MPI_COMM_WORLD
+      on_event: [read_compressed_fdistribu]
+      datasets:
+        fdistribu:
+          type: array
+          subtype: double
+          size: ['$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]']
+      read:
+        fdistribu:
+          dataset_selection:
+            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
+            start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
     - file: 'GYSELALIBXX_initstate.h5'
       on_event: [initial_state]
       collision_policy: replace_and_warn

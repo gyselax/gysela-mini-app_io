@@ -18,6 +18,7 @@ export SPACK_USER_CACHE_PATH="${SPACK_USER_PREFIX}/cache"
 export PYTHONPYCACHEPREFIX=$ALL_CCFRSCRATCH/pycache
 
 module load develop "${SPACK_USER_VERSION}"
+module load llvm/20.1.6
 which spack
 spack debug report
 # Spack must work in a clean, purged environment so it can load modules without
@@ -59,7 +60,9 @@ eval -- "$(
         pdiplugin-pycall \
         python \
         hdf5 \
+        arrow \
         py-dask \
+        py-dask-ml \
         py-deisa-dask \
         py-h5py \
         py-imageio \

@@ -14,6 +14,8 @@ SPACK_USER_VERSION="spack-user-5.0.0"
 export SPACK_USER_PREFIX="/lus/work/CT5/gen2224/SHARED/gysela-mini-app-GENOA"
 export SPACK_USER_CACHE_PATH="${SPACK_USER_PREFIX}/cache"
 
+export SPACK_USER_CONFIG_PATH="${ALL_CCFRWORK}/gyselalibxx-spack-install-py314-genoa/configuration"
+
 # Avoid too many temporary files in the Spack installation tree
 export PYTHONPYCACHEPREFIX=$ALL_CCFRSCRATCH/pycache
 
@@ -21,17 +23,11 @@ module load develop "${SPACK_USER_VERSION}"
 module load llvm/20.1.6
 which spack
 spack debug report
-# Spack must work in a clean, purged environment so it can load modules without
-# having to purge itself or clearing environment variables (which it does not
-# do..). When we spack env activate, the same constraint applies.
-# Use spack load instead of an environment activation as it should limit the
-# inode produced by the environment's view.
-# eval -- "$(spack env activate --prompt --sh gyselalibxx-spack-environment)"
-# unalias despacktivate
-# unset despacktivate
-# function despacktivate() {
-#     eval "$(spack env deactivate --sh)"
-# }
+
+. /lus/home/softs/gaia/prod/5.0.0/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_placeholder__/__spack_path_plac/spack-1.0.1-gcc-13.2.1-3ra4/share/spack/setup-env.sh
+
+# Activate the environment in the scratch directory
+# spack env activate $SPACK_USER_PREFIX
 
 eval -- "$(
     spack \

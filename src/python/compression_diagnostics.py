@@ -45,11 +45,17 @@ def _write_compression_event_csv(event_path, record):
         writer.writerow(record)
 
 
-def apply_online_compression(fdistribu, timestep, rank):
+def apply_online_compression(fdistribu, timestep, rank, local_bounds=None):
     """Rank-local compress/decompress round trip. Mutates fdistribu in place.
+
+    local_bounds, if given, is the local chunk's physical bounding box
+    (x_min, x_max, y_min, y_max, vx_min, vx_max, vy_min, vy_max) within the
+    global mesh; compressors that fit a local model (e.g.
+    OnlineNeuralNetworkCompressor) record it so a downstream tool can later
+    reassemble a global field from the per-rank local models.
     """
     cfg = get_compression_config()
-    approx, metrics = cfg.compressor.compress_decompress_array(fdistribu, rank=rank)
+    approx, metrics = cfg.compressor.compress_decompress_array(fdistribu, rank=rank, local_bounds=local_bounds)
     fdistribu[...] = approx
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)

@@ -132,13 +132,17 @@ class PeriodicFourierScimbaINR(eqx.Module):
 AVAILABLE_INR_ARCHS = [
     "periodic_siren_deep_128",
     "periodic_fourier_mlp_deep_128",
+    "periodic_siren_small_32",
+    "periodic_fourier_mlp_small_32",
 ]
 
 def get_inr_model(arch: str, key: jax.Array) -> eqx.Module:
     """Instantiate an INR architecture"""
     if arch == "periodic_siren_deep_128": return PeriodicSIRENScimbaINR([128]*5, 30.0, key)
     elif arch == "periodic_fourier_mlp_deep_128": return PeriodicFourierScimbaINR(16, [128]*5, 10.0, key)
-    else: 
+    elif arch == "periodic_siren_small_32": return PeriodicSIRENScimbaINR([32]*3, 30.0, key)
+    elif arch == "periodic_fourier_mlp_small_32": return PeriodicFourierScimbaINR(8, [32]*3, 10.0, key)
+    else:
         raise ValueError(f"Unknown INR architecture: {arch}. Available: {AVAILABLE_INR_ARCHS}")
     
 # Training losses
@@ -397,3 +401,253 @@ class NeuralNetworkCompressor(Compressor):
             "final_loss_per_species": [float(h[-1]) for h in self.loss_histories] if self.loss_histories else None,
             "n_train_steps_per_species": [int(h.shape[0]) for h in self.loss_histories] if self.loss_histories else None,
         }
+
+# Compressor (online / in-situ)
+
+class OnlineNeuralNetworkCompressor:
+    """In-situ INR compressor for one rank's local fdistribu[species, x, y, vx, vy] chunk.
+
+    Implements the array-in/array-out online interface used by
+    compression_diagnostics.py's apply_online_compression (same contract as
+    RandomNoiseCompressor.compress_decompress_array). pycal already
+    decomposes the domain across MPI ranks, so each rank calling this
+    compressor on its own local chunk *is* the "parallel local solves"
+    picture: one small NN f_theta^(i)(z) fit directly on subdomain Omega_i,
+    with no cross-rank communication needed for the round trip itself.
+
+    Coordinates are normalized to the LOCAL chunk's own unit cell
+    ([0,1) for x,y, [-1,1] for vx,vy) since apply_online_compression only
+    receives the local array -- not the chunk's placement in the global
+    mesh. If the caller also passes `local_bounds` (the chunk's physical
+    bounding box within the global domain, e.g. derived from
+    local_fdistribu_starts + the global mesh arrays), it is stored and
+    reported in the metrics so a downstream tool can map each rank's unit
+    cell back to physical space and reassemble a smooth global field --
+    see `assemble_global_field` below, which implements
+    f_theta(z, t) = sum_i omega_i(z) f_theta^(i)(z, t).
+
+    Since this runs inside the live timestepping loop, training must be
+    cheap: the per-species models and ADAM states persist across calls
+    (warm start), so only `refine_iters` steps are needed after the first
+    call for a given local chunk shape (`warm_iters` steps, cold start).
+    """
+
+    method_name = "OnlineNeuralNetwork"
+
+    def __init__(
+        self,
+        arch: str = "periodic_siren_small_32",
+        lr: float = 1e-3,
+        warm_iters: int = 200,
+        refine_iters: int = 20,
+        batch_size: Optional[int] = None,
+        threshold: float = 1e-8,
+        seed: int = 42,
+        verbose: bool = False,
+    ):
+        if arch not in AVAILABLE_INR_ARCHS:
+            raise ValueError(f"Unknown arch {arch!r}. Available: {AVAILABLE_INR_ARCHS}")
+
+        self.arch = arch
+        self.lr = float(lr)
+        self.warm_iters = int(warm_iters)
+        self.refine_iters = int(refine_iters)
+        self.batch_size = int(batch_size) if batch_size is not None else None
+        self.threshold = float(threshold)
+        self.seed = int(seed)
+        self.verbose = bool(verbose)
+
+        self._key = jax.random.PRNGKey(self.seed)
+        self.models: Optional[list] = None        # one eqx.Module per species, warm-started
+        self._opts: Optional[list] = None          # one ScimbaAdam per species, warm-started
+        self.local_shape: Optional[tuple] = None   # (nx, ny, nvx, nvy) of the local chunk
+        self.local_bounds: Optional[tuple] = None  # physical bbox of the local chunk, if known
+        self.n_calls = 0
+
+    def printable_name(self) -> str:
+        return (
+            f"{self.method_name}(arch={self.arch}, lr={self.lr}, "
+            f"warm_iters={self.warm_iters}, refine_iters={self.refine_iters})"
+        )
+
+    @staticmethod
+    def _build_local_inputs(nx: int, ny: int, nvx: int, nvy: int) -> jnp.ndarray:
+        x = jnp.linspace(0.0, 1.0, nx, endpoint=False)
+        y = jnp.linspace(0.0, 1.0, ny, endpoint=False)
+        vx = jnp.linspace(-1.0, 1.0, nvx, endpoint=True)
+        vy = jnp.linspace(-1.0, 1.0, nvy, endpoint=True)
+        Xg, Yg, VXg, VYg = jnp.meshgrid(x, y, vx, vy, indexing="ij")
+        return jnp.stack([Xg.ravel(), Yg.ravel(), VXg.ravel(), VYg.ravel()], axis=-1)
+
+    def _fit_one_species(self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters: int):
+        total_points = inputs.shape[0]
+        bs = min(self.batch_size, total_points) if self.batch_size is not None else total_points
+        loss_val = None
+        for _ in range(n_iters):
+            if bs < total_points:
+                self._key, subkey = jax.random.split(self._key)
+                idx = jax.random.choice(subkey, total_points, shape=(bs,), replace=False)
+                batch = (inputs[idx], targets[idx])
+            else:
+                batch = (inputs, targets)
+
+            loss_dict, model, opt = opt.update(model, batch)
+            loss_val = float(loss_dict["total"])
+            if loss_val < self.threshold:
+                break
+        return model, opt, loss_val
+
+    def compress_decompress_array(self, array: np.ndarray, rank: Optional[int] = None, local_bounds: Optional[tuple] = None):
+        f = jnp.asarray(array, dtype=jnp.float64)
+        if f.ndim != 5:
+            raise ValueError(
+                "Expected local fdistribu with rank 5 (Nspecies, Nx, Ny, Nvx, Nvy), "
+                f"got shape {f.shape}"
+            )
+
+        n_species, nx, ny, nvx, nvy = f.shape
+        local_shape = (nx, ny, nvx, nvy)
+
+        if local_bounds is not None:
+            self.local_bounds = tuple(float(b) for b in local_bounds)
+
+        cold_start = self.models is None or self.local_shape != local_shape
+        if cold_start:
+            self.local_shape = local_shape
+            keys = jax.random.split(self._key, n_species + 1)
+            self._key = keys[0]
+            self.models = [get_inr_model(self.arch, keys[i + 1]) for i in range(n_species)]
+            self._opts = [ScimbaAdam(self.models[i], _losses_function, learning_rate=self.lr) for i in range(n_species)]
+
+        inputs = self._build_local_inputs(nx, ny, nvx, nvy)
+        n_iters = self.warm_iters if cold_start else self.refine_iters
+
+        t0 = time.perf_counter()
+        final_losses = []
+        for isp in range(n_species):
+            targets = f[isp].reshape(-1, 1)
+            model, opt, loss_val = self._fit_one_species(
+                self.models[isp], self._opts[isp], inputs, targets, n_iters
+            )
+            self.models[isp] = model
+            self._opts[isp] = opt
+            final_losses.append(loss_val)
+        t1 = time.perf_counter()
+
+        recon_species = [jax.vmap(self.models[isp])(inputs).reshape(nx, ny, nvx, nvy) for isp in range(n_species)]
+        approx = jnp.stack(recon_species)
+        t2 = time.perf_counter()
+
+        if self.verbose:
+            tag = "cold" if cold_start else "warm"
+            print(
+                f"[OnlineINR/{self.arch}] rank {rank}: {tag} fit ({n_iters} iters) "
+                f"final losses {['%.2e' % l for l in final_losses]}"
+            )
+
+        diff = approx - f
+        l2_ref = float(jnp.linalg.norm(f))
+
+        metrics = {
+            "method_name": self.method_name,
+            "params": {
+                "arch": self.arch,
+                "lr": self.lr,
+                "warm_iters": self.warm_iters,
+                "refine_iters": self.refine_iters,
+                "cold_start": cold_start,
+            },
+            "relative_l2_error": float(jnp.linalg.norm(diff) / l2_ref) if l2_ref > 0 else 0.0,
+            "max_abs_error": float(jnp.max(jnp.abs(diff))),
+            "mean_abs_error": float(jnp.mean(jnp.abs(diff))),
+            "rmse": float(jnp.sqrt(jnp.mean(diff ** 2))),
+            "final_loss_per_species": final_losses,
+            "compression_seconds": t1 - t0,
+            "decompression_seconds": t2 - t1,
+            "compression_ratio": None,
+            "local_bounds": self.local_bounds,
+        }
+
+        self.n_calls += 1
+
+        return np.asarray(approx), metrics
+
+# Global assembly (offline reconstruction / visualization utility)
+
+def assemble_global_field(
+    local_models: list,
+    local_bounds: list,
+    query_points: jnp.ndarray,
+    overlap_frac: float = 0.1,
+) -> jnp.ndarray:
+    """Reassemble a global field from per-rank local INRs via a partition of unity.
+
+    Implements f_theta(z, t) = sum_i omega_i(z) f_theta^(i)(z, t): each rank i
+    contributes the local model(s) it trained online on its own subdomain
+    Omega_i (see OnlineNeuralNetworkCompressor), and omega_i is a smooth
+    partition-of-unity weight built from `local_bounds[i]`, cosine-feathered
+    over `overlap_frac` of each subdomain's width near its edges and zero
+    outside it.
+
+    This is a post-hoc reconstruction/visualization utility, not part of the
+    online round trip -- during the simulation each rank only ever writes
+    its own reconstructed chunk back in place. It does not handle periodic
+    wrap-around at the global x/y domain edges; ranks are assumed to tile
+    the interior of the domain.
+
+    Args:
+        local_models: local_models[i] is the list of per-species eqx.Module
+            models trained by rank i's OnlineNeuralNetworkCompressor.
+        local_bounds: local_bounds[i] is rank i's physical bounding box
+            (x_min, x_max, y_min, y_max, vx_min, vx_max, vy_min, vy_max).
+        query_points: physical (x, y, vx, vy) points, shape (N, 4).
+        overlap_frac: fraction of each subdomain's width used for feathering
+            near its edges (matches the "Overlap" bands in the decomposition
+            picture).
+
+    Returns:
+        Array of shape (n_species, N).
+    """
+    n_ranks = len(local_models)
+    if len(local_bounds) != n_ranks:
+        raise ValueError("local_models and local_bounds must have the same length")
+    n_species = len(local_models[0])
+
+    def _ramp(z, lo, hi):
+        # local_bounds tile the domain edge-to-edge with no ghost overlap (each
+        # rank's chunk is exclusive), so the weight must extend *past* its own
+        # [lo, hi] by a margin `o` into the neighbour's territory -- otherwise
+        # adjacent ramps both hit zero exactly at the shared edge and the raw
+        # weight sum collapses to 0 there. Weight is 1 throughout [lo, hi],
+        # cosine-decays to 0 over a margin `o` on each side beyond that.
+        width = jnp.maximum(hi - lo, 1e-12)
+        o = jnp.maximum(overlap_frac * width, 1e-12)
+        left = 0.5 * (1.0 - jnp.cos(jnp.pi * jnp.clip((z - (lo - o)) / o, 0.0, 1.0)))
+        right = 0.5 * (1.0 - jnp.cos(jnp.pi * jnp.clip(((hi + o) - z) / o, 0.0, 1.0)))
+        return jnp.minimum(left, right)
+
+    x, y, vx, vy = query_points[:, 0], query_points[:, 1], query_points[:, 2], query_points[:, 3]
+
+    weights = []
+    local_coords_per_rank = []
+    for x_min, x_max, y_min, y_max, vx_min, vx_max, vy_min, vy_max in local_bounds:
+        w = _ramp(x, x_min, x_max) * _ramp(y, y_min, y_max) * _ramp(vx, vx_min, vx_max) * _ramp(vy, vy_min, vy_max)
+        weights.append(w)
+
+        x_n = (x - x_min) / jnp.maximum(x_max - x_min, 1e-12)
+        y_n = (y - y_min) / jnp.maximum(y_max - y_min, 1e-12)
+        vx_n = 2.0 * (vx - vx_min) / jnp.maximum(vx_max - vx_min, 1e-12) - 1.0
+        vy_n = 2.0 * (vy - vy_min) / jnp.maximum(vy_max - vy_min, 1e-12) - 1.0
+        local_coords_per_rank.append(jnp.stack([x_n, y_n, vx_n, vy_n], axis=-1))
+
+    weights = jnp.stack(weights, axis=0)  # (n_ranks, N)
+    weights = weights / jnp.maximum(jnp.sum(weights, axis=0, keepdims=True), 1e-12)
+
+    out = jnp.zeros((n_species, query_points.shape[0]))
+    for irank in range(n_ranks):
+        coords = local_coords_per_rank[irank]
+        for isp in range(n_species):
+            pred = jax.vmap(local_models[irank][isp])(coords).squeeze(-1)
+            out = out.at[isp].add(weights[irank] * pred)
+
+    return out

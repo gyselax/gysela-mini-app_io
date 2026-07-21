@@ -248,7 +248,12 @@ def start_dask(deisa_env, n_workers=1):
         os.remove(SCHEFILE)
 
     sch_proc = subprocess.Popen(
-        ["dask-scheduler", f"--scheduler-file={SCHEFILE}"],
+        [
+            "dask-scheduler",
+            f"--scheduler-file={SCHEFILE}",
+            "--port", "0",
+            "--dashboard-address", ":0",
+        ],
         env=deisa_env,
     )
 

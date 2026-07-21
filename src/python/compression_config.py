@@ -37,6 +37,7 @@ ONLINE_COMPRESSOR_PARAMS = {
     "lr": 1e-3,
     "warm_iters": 200,
     "refine_iters": 20,
+    "verbose": True,
 }
 
 def build_offline_compressor(**overrides):

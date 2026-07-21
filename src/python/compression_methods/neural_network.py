@@ -463,6 +463,7 @@ class OnlineNeuralNetworkCompressor:
         self.local_shape: Optional[tuple] = None   # (nx, ny, nvx, nvy) of the local chunk
         self.local_bounds: Optional[tuple] = None  # physical bbox of the local chunk, if known
         self.n_calls = 0
+        self._last_local_array: Optional[np.ndarray] = None  # (n_species, nx, ny, nvx, nvy), last fit target
 
     def printable_name(self) -> str:
         return (
@@ -542,7 +543,8 @@ class OnlineNeuralNetworkCompressor:
             tag = "cold" if cold_start else "warm"
             print(
                 f"[OnlineINR/{self.arch}] rank {rank}: {tag} fit ({n_iters} iters) "
-                f"final losses {['%.2e' % l for l in final_losses]}"
+                f"final losses {['%.2e' % l for l in final_losses]}",
+                flush=True,
             )
 
         diff = approx - f
@@ -569,8 +571,74 @@ class OnlineNeuralNetworkCompressor:
         }
 
         self.n_calls += 1
+        self._last_local_array = np.asarray(f)
 
         return np.asarray(approx), metrics
+
+    def save_params(self, path: str, rank: Optional[int] = None, timestep: Optional[int] = None) -> None:
+        """Serialize the current per-species models plus the local data chunk
+        they were just fit on, so `load_online_params` can later reload and
+        evaluate/plot them without rerunning the simulation.
+        """
+        if self.models is None or self._last_local_array is None:
+            raise RuntimeError("save_params called before any compress_decompress_array call")
+
+        path = str(path)
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
+
+        metadata = {
+            "arch": self.arch,
+            "n_species": len(self.models),
+            "local_shape": self.local_shape,
+            "local_bounds": self.local_bounds,
+            "rank": rank,
+            "iter": timestep,
+        }
+
+        payload: dict[str, Any] = {"metadata_json": np.array(json.dumps(metadata))}
+        for isp, model in enumerate(self.models):
+            flat, _ = ravel_pytree(model)
+            payload[f"weights_{isp}"] = np.asarray(flat)
+            payload[f"target_{isp}"] = self._last_local_array[isp]
+
+        np.savez_compressed(path, **payload)
+
+
+def load_online_params(path: str) -> dict:
+    """Reload a payload written by `OnlineNeuralNetworkCompressor.save_params`.
+
+    Returns a dict with keys: arch, rank, iter, local_shape, local_bounds,
+    models (list of eqx.Module, one per species, ready to evaluate on the
+    unit-cell grid built by `OnlineNeuralNetworkCompressor._build_local_inputs`),
+    and target (np.ndarray, shape (n_species, nx, ny, nvx, nvy) -- the local
+    data the models were fit on).
+    """
+    with np.load(path, allow_pickle=False) as payload:
+        metadata = json.loads(str(payload["metadata_json"].item()))
+        n_species = int(metadata["n_species"])
+        arch = metadata["arch"]
+
+        key = jax.random.PRNGKey(0)
+        models = []
+        targets = []
+        for isp in range(n_species):
+            template = get_inr_model(arch, key)
+            _, unravel_fn = ravel_pytree(template)
+            flat = jnp.asarray(payload[f"weights_{isp}"])
+            models.append(unravel_fn(flat))
+            targets.append(np.asarray(payload[f"target_{isp}"]))
+
+    local_bounds = metadata.get("local_bounds")
+    return {
+        "arch": arch,
+        "rank": metadata.get("rank"),
+        "iter": metadata.get("iter"),
+        "local_shape": tuple(metadata["local_shape"]),
+        "local_bounds": tuple(local_bounds) if local_bounds is not None else None,
+        "models": models,
+        "target": np.stack(targets),
+    }
 
 # Global assembly (offline reconstruction / visualization utility)
 

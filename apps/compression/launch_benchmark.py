@@ -22,7 +22,7 @@ EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/gys_compress"]
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
-SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
+SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_two_stream.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
 ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
 COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")

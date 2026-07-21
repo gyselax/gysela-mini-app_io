@@ -284,7 +284,7 @@ class NeuralNetworkCompressor(Compressor):
         else:
             key, subkey = jax.random.split(key)
             model = get_inr_model(self.arch, subkey)
-            
+        
         total_points = inputs.shape[0]
         loss_history = []
         
@@ -428,8 +428,14 @@ class OnlineNeuralNetworkCompressor:
 
     Since this runs inside the live timestepping loop, training must be
     cheap: the per-species models and ADAM states persist across calls
-    (warm start), so only `refine_iters` steps are needed after the first
-    call for a given local chunk shape (`warm_iters` steps, cold start).
+    (warm start), so only `refine_iters_adam` steps are needed after the
+    first call for a given local chunk shape (`warm_iters_adam` steps, cold
+    start). Each call's ADAM phase is followed by a short L-BFGS polish
+    (`warm_iters_lbfgs` / `refine_iters_lbfgs` steps), same two-phase ADAM +
+    L-BFGS routine as `NeuralNetworkCompressor` above -- the L-BFGS optimizer
+    itself is re-instantiated fresh each call (not warm-started) since its
+    internal history is only meaningful right after the ADAM phase that
+    precedes it.
     """
 
     method_name = "OnlineNeuralNetwork"
@@ -438,24 +444,30 @@ class OnlineNeuralNetworkCompressor:
         self,
         arch: str = "periodic_siren_small_32",
         lr: float = 1e-3,
-        warm_iters: int = 200,
-        refine_iters: int = 20,
+        warm_iters_adam: int = 200,
+        warm_iters_lbfgs: int = 20,
+        refine_iters_adam: int = 20,
+        refine_iters_lbfgs: int = 5,
         batch_size: Optional[int] = None,
         threshold: float = 1e-8,
         seed: int = 42,
         verbose: bool = False,
+        debug_plot: bool = False,
     ):
         if arch not in AVAILABLE_INR_ARCHS:
             raise ValueError(f"Unknown arch {arch!r}. Available: {AVAILABLE_INR_ARCHS}")
 
         self.arch = arch
         self.lr = float(lr)
-        self.warm_iters = int(warm_iters)
-        self.refine_iters = int(refine_iters)
+        self.warm_iters_adam = int(warm_iters_adam)
+        self.warm_iters_lbfgs = int(warm_iters_lbfgs)
+        self.refine_iters_adam = int(refine_iters_adam)
+        self.refine_iters_lbfgs = int(refine_iters_lbfgs)
         self.batch_size = int(batch_size) if batch_size is not None else None
         self.threshold = float(threshold)
         self.seed = int(seed)
         self.verbose = bool(verbose)
+        self.debug_plot = bool(debug_plot)
 
         self._key = jax.random.PRNGKey(self.seed)
         self.models: Optional[list] = None        # one eqx.Module per species, warm-started
@@ -468,7 +480,8 @@ class OnlineNeuralNetworkCompressor:
     def printable_name(self) -> str:
         return (
             f"{self.method_name}(arch={self.arch}, lr={self.lr}, "
-            f"warm_iters={self.warm_iters}, refine_iters={self.refine_iters})"
+            f"warm_iters_adam={self.warm_iters_adam}, warm_iters_lbfgs={self.warm_iters_lbfgs}, "
+            f"refine_iters_adam={self.refine_iters_adam}, refine_iters_lbfgs={self.refine_iters_lbfgs})"
         )
 
     @staticmethod
@@ -480,11 +493,15 @@ class OnlineNeuralNetworkCompressor:
         Xg, Yg, VXg, VYg = jnp.meshgrid(x, y, vx, vy, indexing="ij")
         return jnp.stack([Xg.ravel(), Yg.ravel(), VXg.ravel(), VYg.ravel()], axis=-1)
 
-    def _fit_one_species(self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters: int):
+    def _fit_one_species(
+        self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int
+    ):
         total_points = inputs.shape[0]
         bs = min(self.batch_size, total_points) if self.batch_size is not None else total_points
         loss_val = None
-        for _ in range(n_iters):
+
+        # Phase 1: ADAM, warm-started across calls, mini-batches
+        for _ in range(n_iters_adam):
             if bs < total_points:
                 self._key, subkey = jax.random.split(self._key)
                 idx = jax.random.choice(subkey, total_points, shape=(bs,), replace=False)
@@ -496,7 +513,48 @@ class OnlineNeuralNetworkCompressor:
             loss_val = float(loss_dict["total"])
             if loss_val < self.threshold:
                 break
+
+        # Phase 2: L-BFGS, full-batch, freshly instantiated each call to polish
+        # the ADAM warm-started fit (same two-phase routine as the offline compressor)
+        if n_iters_lbfgs > 0 and (loss_val is None or loss_val >= self.threshold):
+            full_batch = (inputs, targets)
+            lbfgs_opt = ScimbaLBfgs(model, _losses_function)
+            for _ in range(n_iters_lbfgs):
+                loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
+                loss_val = float(loss_dict["total"])
+                if loss_val < self.threshold:
+                    break
+
         return model, opt, loss_val
+
+    def _plot_local_xvx_debug(self, f_orig, f_approx, rank: Optional[int] = None):
+        """Save a quick x–vx plot of local original vs reconstruction (species 0)."""
+        import matplotlib.pyplot as plt
+
+        f0 = np.asarray(f_orig[0])
+        a0 = np.asarray(f_approx[0])
+        # Marginalize over y and vy -> (x, vx)
+        f_xvx = np.sum(f0, axis=(1, 3))
+        a_xvx = np.sum(a0, axis=(1, 3))
+
+        fig, axs = plt.subplots(1, 3, figsize=(12, 4), constrained_layout=True)
+        for ax, data, title in (
+            (axs[0], f_xvx, "local original"),
+            (axs[1], a_xvx, "local reconstruction"),
+            (axs[2], np.abs(f_xvx - a_xvx), "|error|"),
+        ):
+            im = ax.imshow(data, origin="lower", aspect="auto", cmap="viridis")
+            ax.set_title(title)
+            ax.set_xlabel("vx index")
+            ax.set_ylabel("x index")
+            fig.colorbar(im, ax=ax, fraction=0.046)
+
+        rank_tag = f"{rank:03d}" if rank is not None else "na"
+        out = f"nn_online_local_rank{rank_tag}_call{self.n_calls:04d}_xvx.png"
+        fig.savefig(out, dpi=100)
+        plt.close(fig)
+        if self.verbose:
+            print(f"[OnlineINR] debug plot written: {out}", flush=True)
 
     def compress_decompress_array(self, array: np.ndarray, rank: Optional[int] = None, local_bounds: Optional[tuple] = None):
         f = jnp.asarray(array, dtype=jnp.float64)
@@ -521,14 +579,15 @@ class OnlineNeuralNetworkCompressor:
             self._opts = [ScimbaAdam(self.models[i], _losses_function, learning_rate=self.lr) for i in range(n_species)]
 
         inputs = self._build_local_inputs(nx, ny, nvx, nvy)
-        n_iters = self.warm_iters if cold_start else self.refine_iters
+        n_iters_adam = self.warm_iters_adam if cold_start else self.refine_iters_adam
+        n_iters_lbfgs = self.warm_iters_lbfgs if cold_start else self.refine_iters_lbfgs
 
         t0 = time.perf_counter()
         final_losses = []
         for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
             model, opt, loss_val = self._fit_one_species(
-                self.models[isp], self._opts[isp], inputs, targets, n_iters
+                self.models[isp], self._opts[isp], inputs, targets, n_iters_adam, n_iters_lbfgs
             )
             self.models[isp] = model
             self._opts[isp] = opt
@@ -542,7 +601,8 @@ class OnlineNeuralNetworkCompressor:
         if self.verbose:
             tag = "cold" if cold_start else "warm"
             print(
-                f"[OnlineINR/{self.arch}] rank {rank}: {tag} fit ({n_iters} iters) "
+                f"[OnlineINR/{self.arch}] rank {rank}: {tag} fit "
+                f"(ADAM {n_iters_adam} + L-BFGS {n_iters_lbfgs} iters) "
                 f"final losses {['%.2e' % l for l in final_losses]}",
                 flush=True,
             )
@@ -555,8 +615,10 @@ class OnlineNeuralNetworkCompressor:
             "params": {
                 "arch": self.arch,
                 "lr": self.lr,
-                "warm_iters": self.warm_iters,
-                "refine_iters": self.refine_iters,
+                "warm_iters_adam": self.warm_iters_adam,
+                "warm_iters_lbfgs": self.warm_iters_lbfgs,
+                "refine_iters_adam": self.refine_iters_adam,
+                "refine_iters_lbfgs": self.refine_iters_lbfgs,
                 "cold_start": cold_start,
             },
             "relative_l2_error": float(jnp.linalg.norm(diff) / l2_ref) if l2_ref > 0 else 0.0,
@@ -572,6 +634,9 @@ class OnlineNeuralNetworkCompressor:
 
         self.n_calls += 1
         self._last_local_array = np.asarray(f)
+
+        if self.debug_plot:
+            self._plot_local_xvx_debug(f, approx, rank=rank)
 
         return np.asarray(approx), metrics
 

@@ -35,9 +35,12 @@ ONLINE_COMPRESSOR_CLASS = OnlineNeuralNetworkCompressor
 ONLINE_COMPRESSOR_PARAMS = {
     "arch": "periodic_siren_small_32",
     "lr": 1e-3,
-    "warm_iters": 200,
-    "refine_iters": 20,
+    "warm_iters_adam": 300,
+    "warm_iters_lbfgs": 30,
+    "refine_iters_adam": 200,
+    "refine_iters_lbfgs": 20,
     "verbose": True,
+    "debug_plot": True,
 }
 
 def build_offline_compressor(**overrides):

@@ -14,7 +14,7 @@ MACHINE="${1:-${GYSELA_MACHINE:-}}"
 if [[ -z "${MACHINE}" ]]; then
   host="$(hostname -s 2>/dev/null || hostname)"
   case "${host}" in
-    persee*) MACHINE="persee/v100" ;;
+    persee*) MACHINE="persee/xeon" ;;
   esac
 fi
 

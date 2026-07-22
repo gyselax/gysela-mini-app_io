@@ -56,7 +56,6 @@ def apply_online_compression(fdistribu, timestep, rank, local_bounds=None):
     """
     cfg = get_compression_config()
     approx, metrics = cfg.compressor.compress_decompress_array(fdistribu, rank=rank, local_bounds=local_bounds)
-    fdistribu[...] = approx
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -72,6 +71,8 @@ def apply_online_compression(fdistribu, timestep, rank, local_bounds=None):
         record[f"param_{key}"] = value
 
     _write_compression_event_csv(event_path, record)
+    
+    fdistribu[...] = approx
     return fdistribu
 
 

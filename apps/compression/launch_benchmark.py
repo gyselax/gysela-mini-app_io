@@ -26,8 +26,22 @@ SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
 ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
 COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")
-ACTIVATE_SCRIPT = os.path.join(BASE_DIR, "apps", "io", "activate_deisa_spack_env.sh")
 SCHEFILE = os.path.join(BASE_DIR, "scheduler.json")
+
+
+# ------------------------------------------------------------------
+# Persee: toolchain environment.sh + personal venv are sourced directly
+# ------------------------------------------------------------------
+PERSEE_ENV_SCRIPT = None
+PERSEE_VENV_ACTIVATE = None
+
+
+def configure_persee(args):
+    """Resolve the toolchains/persee/<arch>/environment.sh and venv activate paths from args."""
+    global PERSEE_ENV_SCRIPT, PERSEE_VENV_ACTIVATE
+    PERSEE_ENV_SCRIPT = os.path.join(BASE_DIR, "toolchains", "persee", args.arch.lower(), "environment.sh")
+    venv_dir = os.path.abspath(args.venv) if args.venv else os.path.join(BASE_DIR, ".gys_env")
+    PERSEE_VENV_ACTIVATE = os.path.join(venv_dir, "bin", "activate")
 
 
 def parse_args():
@@ -75,6 +89,25 @@ def parse_args():
         action="store_true",
         help=(
             "Use online in-situ compression instead of the offline."
+        ),
+    )
+
+    parser.add_argument(
+        "--arch",
+        default="xeon",
+        choices=["xeon", "v100"],
+        help=(
+            "Persee arch/toolchain to activate: toolchains/persee/<arch>/"
+            "environment.sh. Default: xeon."
+        ),
+    )
+
+    parser.add_argument(
+        "--venv",
+        default=None,
+        help=(
+            "Path (relative or absolute) to the venv directory "
+            "to activate alongside the persee toolchain"
         ),
     )
 
@@ -224,16 +257,24 @@ def create_yaml_override(
 # ------------------------------------------------------------------
 
 def load_deisa_env():
-    """Source the spack+venv activation script and capture the resulting environment."""
-    if not os.path.exists(ACTIVATE_SCRIPT):
+    """Source a toolchain environment.sh + personal venv directly and capture the
+    resulting environment."""
+
+    if not os.path.exists(PERSEE_ENV_SCRIPT):
         raise RuntimeError(
-            f"Deisa activation script not found: {ACTIVATE_SCRIPT}\n"
-            "Ensure the spack environment and venv are set up as described "
-            "in apps/io/README.md."
+            f"Toolchain environment script not found: {PERSEE_ENV_SCRIPT}\n"
+            "Check --arch matches an existing toolchains/persee/<arch>/ "
         )
+
+    source_cmds = f'. "{PERSEE_ENV_SCRIPT}" 1>&2'
+    if os.path.isfile(PERSEE_VENV_ACTIVATE):
+        source_cmds += f' && . "{PERSEE_VENV_ACTIVATE}" 1>&2'
+    else:
+        print(f"[Warning] Personal venv not found at {PERSEE_VENV_ACTIVATE}; skipping.")
+
     result = subprocess.run(
         ["bash", "-c",
-         f'. "{ACTIVATE_SCRIPT}" && python3 -c '
+         f'{source_cmds} && python3 -c '
          '"import os,json,sys; sys.stdout.write(json.dumps(dict(os.environ)))"'],
         capture_output=True,
         text=True,
@@ -494,6 +535,7 @@ def compare_results(run_dir):
 
 def main():
     args = parse_args()
+    configure_persee(args)
 
     assert_file_exists(SOURCE_GYSELA_YAML, "base GYSELA input template")
     assert_file_exists(SOURCE_PDI_YAML, "base PDI input template")

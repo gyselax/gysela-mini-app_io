@@ -8,6 +8,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from Compressor import Compressor
+from pathlib import Path
 
 
 class PCACompressor(Compressor):
@@ -399,3 +400,17 @@ class PCACompressor(Compressor):
             output_h5=output_h5,
             compressed_path=compressed_path,
         )
+
+    def save_svd_spectrum(self, spectrum_dir, timestep):
+        if self.model is None:
+            raise RuntimeError("No fitted PCA model available.")
+        s = self.model.singular_values_ 
+        s_norm = s / s[0]
+        spectrum_dir = Path(spectrum_dir)
+        spectrum_dir.mkdir(parents=True, exist_ok=True)
+        path = spectrum_dir / f"spectrum_iter{timestep:05d}.csv"
+        with open(path, "w") as f:
+            f.write("index,sigma_norm\n")
+            for idx, val in enumerate(s_norm):
+                f.write(f"{idx},{float(val):.12e}\n")
+        return path

@@ -22,7 +22,8 @@ EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/gys_compress"]
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
-SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
+#SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
+SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_two_stream.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
 ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
 COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")
@@ -76,6 +77,29 @@ def parse_args():
         help=(
             "Use online in-situ compression instead of the offline."
         ),
+    )
+    
+    parser.add_argument(
+        "--compression", 
+        type=str, 
+        choices=["POD", "NN"], 
+        default=None,
+        help="Override for the offline compressor defined in compression_config.py."
+    )
+    
+    parser.add_argument(
+        "--rank", 
+        type=int, 
+        default=32, 
+        help="n_components for POD."
+    )
+    
+    parser.add_argument(
+        "--arch", 
+        type=str, 
+        default="periodic_siren_deep_128",
+        choices=["periodic_siren_deep_128", "periodic_fourier_mlp_deep_128"],
+        help="INR architecture (if --compression NN)"
     )
 
     return parser.parse_args()
@@ -394,37 +418,42 @@ def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
     return dir_baseline
 
 
-def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, mesh_kwargs=None, n_workers=1):
-    dir_offline = os.path.join(run_dir, "branch_offline_compressed")
-    yaml_offline = os.path.join(run_dir, "config_offline_compressed.yaml")
+def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period,
+                                   mesh_kwargs=None, method_override=None, n_workers=1):
+    branch_name = _offline_branch_name(method_override)
+    dir_offline = os.path.join(run_dir, branch_name)
+    yaml_offline = os.path.join(run_dir, f"config_{branch_name}.yaml")
 
     create_yaml_override(
-        SOURCE_GYSELA_YAML,
-        yaml_offline,
-        nb_restart=0,
+        SOURCE_GYSELA_YAML, 
+        yaml_offline, 
+        nb_restart=0, 
         fdist_file="none",
-        nbiter=iter_total,
+        nbiter=iter_total, 
         iter_offset=0,
-        compression_period=compression_period,
+        compression_period=compression_period, 
         compression_mode=2,
     )
 
-    extra_env = {"COMPRESSION_MESH_KWARGS": json.dumps(mesh_kwargs)} if mesh_kwargs else None
+    extra_env = {}
+    if mesh_kwargs:
+        extra_env["COMPRESSION_MESH_KWARGS"] = json.dumps(mesh_kwargs)
+    if method_override:
+        extra_env["COMPRESSION_METHOD_OVERRIDE"] = json.dumps(method_override)
 
     run_sim_with_diagnostics(
-        branch_name="Offline compressed",
-        gysela_yaml=yaml_offline,
-        pdi_yaml=run_pdi_yaml,
+        branch_name=branch_name.replace("branch_", ""),
+        gysela_yaml=yaml_offline, 
+        pdi_yaml=run_pdi_yaml, 
         work_dir=dir_offline,
-        n_workers=n_workers,
-        extra_env=extra_env,
+        n_workers=n_workers, 
+        extra_env=extra_env or None,
     )
 
     events = _collect_offline_compression_events(dir_offline)
     write_compression_manifest(run_dir, events)
-
+    
     return dir_offline
-
 
 def _collect_offline_compression_events(work_dir):
     csv_path = os.path.join(work_dir, "compression_events_offline.csv")
@@ -461,6 +490,15 @@ def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_
     write_compression_manifest(run_dir, events)
 
     return dir_online
+
+def _offline_branch_name(method_override):
+    if not method_override:
+        return "branch_offline_compressed"
+    if method_override["class"] == "PCA":
+        return f"branch_offline_compressed_POD_r{method_override['params']['n_components']}"
+    if method_override["class"] == "NeuralNetwork":
+        return f"branch_offline_compressed_NN_{method_override['params']['arch']}"
+    return "branch_offline_compressed"
 
 
 def _collect_online_compression_events(work_dir):
@@ -522,6 +560,28 @@ def main():
     print(f"Total iterations       : {iter_total}")
     print(f"Compression period K   : {compression_period}")
     print(f"Diagnostic step        : {nbstep_diag}")
+    
+    method_override = None
+    if args.compression == "POD":
+        method_override = {
+            "class": "PCA",
+            "params": {
+                "n_components": args.rank,
+                "normalisation": "none",
+                "clip_nonnegative": False,
+            }
+        } 
+    elif args.compression == "NN":
+        method_override = {
+            "class": "NeuralNetwork",
+            "params": {
+                "arch": args.arch,
+                "lr": 1e-3,
+                "max_iters": 2000,
+                "batch_size": 2000,
+                "lbfgs_iters": 50,
+            }
+        }
 
     if args.overwrite:
         print("\n--- Skipping reference simulation (--overwrite): reusing existing baseline ---")
@@ -548,9 +608,9 @@ def main():
             iter_total=iter_total,
             compression_period=compression_period,
             mesh_kwargs=mesh_kwargs,
+            method_override=method_override,
             n_workers=args.dask_workers,
         )
-
     if not args.keep_pdi_copy:
         remove_file_if_exists(run_pdi_yaml, "copied PDI config")
 

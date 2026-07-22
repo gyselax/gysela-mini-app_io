@@ -7,16 +7,16 @@ Input:
 SplineMesh:
   x_min: 0.0
   x_max: 31.41592653589793
-  x_ncells: 32
+  x_ncells: 64
   y_min: 0.0
   y_max: 31.41592653589793
-  y_ncells : 32
+  y_ncells : 64
   vx_min: -15.707963267948966
   vx_max: +15.707963267948966
-  vx_ncells: 33
+  vx_ncells: 65
   vy_min: -15.707963267948966
   vy_max: +15.707963267948966
-  vy_ncells: 33
+  vy_ncells: 65
 
 SpeciesInfo:
 - charge: -1.
@@ -35,4 +35,4 @@ CompressionBenchmark:
   compression_period: 10
 
 Output:
-  nbiter_diag: 2  # diagnostics every N timesteps (must divide compression_period)
+  nbiter_diag: 1  # diagnostics every N timesteps (must divide compression_period)

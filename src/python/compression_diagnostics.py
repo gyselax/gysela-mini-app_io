@@ -5,6 +5,7 @@ import os
 import csv
 import json
 import h5py
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,6 +68,7 @@ def apply_online_compression(fdistribu, timestep, rank):
 def _offline_compressed_restart_path(data_dir, timestep):
     return Path(data_dir) / f"GYSELALIBXX_compressed_{timestep:05d}.h5"
 
+_LAST_EVENT_WALLTIME = {}
 
 def run_offline_compression_on_global_array(fdistribu_global, timestep, data_dir="."):
     """Compress the globally assembled array and write the
@@ -74,17 +76,36 @@ def run_offline_compression_on_global_array(fdistribu_global, timestep, data_dir
     """
     cfg = get_offline_compression_config(data_dir)
 
+    t_now = time.perf_counter()
+    prev_t = _LAST_EVENT_WALLTIME.get(str(cfg.data_dir))
+    _LAST_EVENT_WALLTIME[str(cfg.data_dir)] = t_now
+
     _coefficients, reconstructed = cfg.compressor.compress_decompress_array(fdistribu_global)
+    
     metrics = cfg.compressor.compute_metrics(
         f_original=fdistribu_global,
         f_reconstructed=reconstructed,
     )
+    
+    # Wall-clock approximation of pure simulation time (no exact PDI measurement at this stage)
+    if prev_t is not None:
+        delta_wall = t_now - prev_t
+        comp_t = metrics.get("compression_seconds") or 0.0 
+        decomp_t = metrics.get("decompression_seconds") or 0.0
+        metrics["sim_time_approx"] = max(0.0, delta_wall - comp_t - decomp_t)
+    else:
+        metrics["sim_time_approx"] = None
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     out_path = _offline_compressed_restart_path(cfg.data_dir, timestep)
     with h5py.File(out_path, "w") as h5:
         h5.create_dataset("fdistribu", data=reconstructed)
 
+    if hasattr(cfg.compressor, "save_svd_spectrum"):
+        cfg.compressor.save_svd_spectrum(cfg.data_dir / "svd_spectrums", timestep)
+    if hasattr(cfg.compressor, "save_loss_histories"):
+        cfg.compressor.save_loss_histories(cfg.data_dir / "loss_histories", timestep)
+    
     event_path = cfg.data_dir / "compression_events_offline.csv"
     record = {"iter": timestep}
     record.update({k: v for k, v in metrics.items() if k != "params"})

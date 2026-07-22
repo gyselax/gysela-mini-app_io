@@ -335,7 +335,10 @@ class NeuralNetworkCompressor(Compressor):
         inputs = self._build_inputs(nx, ny, nvx, nvy)
         
         key = jax.random.PRNGKey(self.seed)
-        warm_models = self._load_warm_start_models(n_species, key)
+        if self.models:
+            warm_models = self.models 
+        else:
+            warm_models = self._load_warm_start_models(n_species, key)
         
         self.models = []
         self.loss_histories = []
@@ -357,6 +360,16 @@ class NeuralNetworkCompressor(Compressor):
             self.loss_histories.append(loss_hist)
         
         return {"models": self.models, "grid_shape": (nx, ny, nvx, nvy)}
+    
+    def save_loss_histories(self, out_dir, timestep):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for isp, hist in enumerate(self.loss_histories):
+            p = out_dir / f"loss_iter{timestep:05d}_sp{isp}_{self.arch}.npy"
+            np.save(p, np.asarray(hist))
+            paths.append(p)
+        return paths
     
     def decompress_array(self, compressed: dict) -> jnp.ndarray:
         models = compressed["models"]

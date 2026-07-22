@@ -131,7 +131,7 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 300.0
+              deadline = time.time() + 3600.0
               done = False
               while not done:
                 try:
@@ -185,7 +185,7 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 60.0
+              deadline = time.time() + 3600.0
               done = False
               while not done:
                 try:

@@ -1,5 +1,5 @@
 
-include(${CMAKE_CURRENT_LIST_DIR}/../../common_toolchains/importable_defaults.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../../../src/external/gyselalibxx/toolchains/common_toolchains/importable_defaults.cmake)
 
 # CMake options
 set(CMAKE_BUILD_TYPE Release)

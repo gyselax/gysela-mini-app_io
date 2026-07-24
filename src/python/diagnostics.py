@@ -9,6 +9,8 @@ import numpy as np
 from deisa.dask import Deisa
 from distributed import get_client
 
+import compression_diagnostics
+
 _MEASURE_CFG = None
 
 @dataclass
@@ -28,14 +30,14 @@ class GridConfig:
     ky: object = field(init=False)
 
     def __post_init__(self):
-        Nx = np.asarray(self.x).size
-        Ny = np.asarray(self.y).size
-        self.kx = 2.0 * np.pi * np.fft.fftfreq(Nx, d=self.dx)
-        self.ky = 2.0 * np.pi * np.fft.fftfreq(Ny, d=self.dy)
+        Nx = da.asarray(self.x).size
+        Ny = da.asarray(self.y).size
+        self.kx = 2.0 * da.pi * da.fft.fftfreq(Nx, d=self.dx)
+        self.ky = 2.0 * da.pi * da.fft.fftfreq(Ny, d=self.dy)
 
     @staticmethod
     def spacing(coord):
-        values = np.asarray(coord)
+        values = da.asarray(coord)
         if values.size < 2:
             raise ValueError(
                 "Young Padawan, a single point doth not a grid make. "
@@ -102,14 +104,14 @@ def poisson_fft(n, grid):
     """
     rho_hat = da.fft.fft2(n - 1.0)
 
-    KX, KY = np.meshgrid(grid.kx, grid.ky, indexing="ij")
+    KX, KY = da.meshgrid(grid.kx, grid.ky, indexing="ij")
     k2 = KX ** 2 + KY ** 2
     k2[0, 0] = 1.0              # avoid /0; DC mode zeroed by mask below
 
-    mask = np.ones_like(k2)
+    mask = da.ones_like(k2)
     mask[0, 0] = 0.0            # gauge: phi_hat(0,0) = 0
 
-    phi_hat = rho_hat / da.from_array(k2) * da.from_array(mask)
+    phi_hat = rho_hat / k2 * mask
     return da.real(da.fft.ifft2(phi_hat))
 
 
@@ -122,9 +124,9 @@ def electric_field_from_potential(phi, grid):
     Returns array of shape (Nx, Ny, 2).
     """
     phi_hat = da.fft.fft2(phi)
-    KX, KY = np.meshgrid(grid.kx, grid.ky, indexing="ij")
-    Ex = da.real(da.fft.ifft2(-1j * da.from_array(KX) * phi_hat))
-    Ey = da.real(da.fft.ifft2(-1j * da.from_array(KY) * phi_hat))
+    KX, KY = da.meshgrid(grid.kx, grid.ky, indexing="ij")
+    Ex = da.real(da.fft.ifft2(-1j * KX * phi_hat))
+    Ey = da.real(da.fft.ifft2(-1j * KY * phi_hat))
     return da.stack([Ex, Ey], axis=-1)
 
 
@@ -170,9 +172,9 @@ def measure(cfg, f, Efield, it, t_actual):
         "ekin":       ekin,
         "epot":       epot,
         "etot":       ekin + epot,
-        "l2norm":     float(np.sqrt(l2norm_sq)),
+        "l2norm":     float(da.sqrt(l2norm_sq)),
         "mass":       mass,
-        "momentum":   float(np.hypot(momentum_x, momentum_y)),
+        "momentum":   float(da.hypot(momentum_x, momentum_y)),
         "momentum_x": momentum_x,
         "momentum_y": momentum_y,
     }
@@ -191,6 +193,16 @@ def measure(cfg, f, Efield, it, t_actual):
 # ---------------------------------------------------------------------------
 
 deisa = Deisa()
+
+@deisa.register("fdistribu_offline")
+def compute_offline_compression(fdistribu_chunks):
+    timestep = int(fdistribu_chunks[0].t)
+    fdistribu_global = np.array(fdistribu_chunks[0])
+
+    compression_diagnostics.run_offline_compression_on_global_array(fdistribu_global, timestep)
+
+    deisa.set("fdistribu_offline_done", True, timestep=timestep)
+
 
 @deisa.register("fdistribu", "absolute_time", "MeshX", "MeshY", "MeshVx", "MeshVy")
 def compute_diagnostics(fdistribu, time, mx, my, mvx, mvy):

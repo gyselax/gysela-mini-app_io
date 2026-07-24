@@ -98,6 +98,10 @@ def run_offline_compression_on_global_array(fdistribu_global, timestep, data_dir
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     out_path = _offline_compressed_restart_path(cfg.data_dir, timestep)
+    #save the compressed payload for warm-starting
+    payload_path = cfg.data_dir / f"payload_iter{timestep:05d}.npz"
+    cfg.compressor.save_compressed_payload(str(payload_path), _coefficients)
+    
     with h5py.File(out_path, "w") as h5:
         h5.create_dataset("fdistribu", data=reconstructed)
 

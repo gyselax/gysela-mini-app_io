@@ -35,10 +35,10 @@ ONLINE_COMPRESSOR_CLASS = OnlineNeuralNetworkCompressor
 ONLINE_COMPRESSOR_PARAMS = {
     "arch": "periodic_siren_small_32",
     "lr": 1e-3,
-    "warm_iters_adam": 300,
-    "warm_iters_lbfgs": 30,
-    "refine_iters_adam": 200,
-    "refine_iters_lbfgs": 20,
+    "warm_iters_adam": 3,
+    "warm_iters_lbfgs": 3,
+    "refine_iters_adam": 2,
+    "refine_iters_lbfgs": 2,
     "verbose": True,
     "debug_plot": True,
 }
@@ -49,5 +49,12 @@ def build_offline_compressor(**overrides):
     params = {**OFFLINE_COMPRESSOR_PARAMS, **filtered}
     return OFFLINE_COMPRESSOR_CLASS(**params)
 
-def build_online_compressor():
-    return ONLINE_COMPRESSOR_CLASS(**ONLINE_COMPRESSOR_PARAMS)
+def build_online_compressor(rank=None):
+    params = dict(ONLINE_COMPRESSOR_PARAMS)
+    if rank is not None:
+        # Every MPI rank otherwise builds its compressor from the same default
+        # seed, so all ranks' networks start from identical initial weights
+        # and stay highly correlated (looking like duplicated output once
+        # assembled) unless training runs long enough to fully diverge.
+        params["seed"] = params.get("seed", 42) + rank
+    return ONLINE_COMPRESSOR_CLASS(**params)

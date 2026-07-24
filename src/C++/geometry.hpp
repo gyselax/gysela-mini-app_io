@@ -85,11 +85,11 @@ struct BSplinesMu : ddc::UniformBSplines<Mu, BSDegreeMu>
 {
 };
 
-ddc::BoundCond constexpr SplineTor1Boundary = ddc::BoundCond::GREVILLE;
-ddc::BoundCond constexpr SplineTor2Boundary = ddc::BoundCond::PERIODIC;
-ddc::BoundCond constexpr SplineTor3Boundary = ddc::BoundCond::PERIODIC;
-ddc::BoundCond constexpr SplineVparBoundary = ddc::BoundCond::HERMITE;
-ddc::BoundCond constexpr SplineMuBoundary = ddc::BoundCond::HERMITE;
+ddc::SplineBuilderClosure constexpr SplineTor1Boundary = ddc::SplineBuilderClosure::GREVILLE;
+ddc::SplineBuilderClosure constexpr SplineTor2Boundary = ddc::SplineBuilderClosure::PERIODIC;
+ddc::SplineBuilderClosure constexpr SplineTor3Boundary = ddc::SplineBuilderClosure::PERIODIC;
+ddc::SplineBuilderClosure constexpr SplineVparBoundary = ddc::SplineBuilderClosure::HERMITE;
+ddc::SplineBuilderClosure constexpr SplineMuBoundary = ddc::SplineBuilderClosure::HERMITE;
 
 using SplineInterpPointsTor1
         = ddc::GrevilleInterpolationPoints<BSplinesTor1, SplineTor1Boundary, SplineTor1Boundary>;

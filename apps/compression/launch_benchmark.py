@@ -17,7 +17,7 @@ import csv
 from evaluate_compression import plot_diags
 
 
-EXEC_CMD = ["mpirun", "-n", "4", "./build/apps/compression/gys_compress"]
+GYS_COMPRESS_BIN = "./build/apps/compression/gys_compress"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
@@ -28,20 +28,68 @@ ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
 COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")
 SCHEFILE = os.path.join(BASE_DIR, "scheduler.json")
 
-
 # ------------------------------------------------------------------
-# Persee: toolchain environment.sh + personal venv are sourced directly
+# Toolchain resolution: a single --arch flag picks
+# toolchains/<site>/<arch>/environment.sh, where <site> is 'adastra' if
+# sbatch is available (login or compute node) and 'persee' otherwise.
+# On Adastra, --arch also becomes 'srun/#SBATCH --constraint='.
 # ------------------------------------------------------------------
-PERSEE_ENV_SCRIPT = None
-PERSEE_VENV_ACTIVATE = None
+ENV_SCRIPT = None  # resolved from --arch
+VENV_ACTIVATE = None  # resolved from --venv
+
+# 3 distinct nodes on Adastra: one each for the Dask scheduler, the Dask
+# worker(s), and the simulation
+ADASTRA_NODES = 3
+ADASTRA_N_PROCS = 4  # simulation MPI ranks
+
+# Dask worker processes on its dedicated node: 1 per CPU socket
+WORKER_RANKS_PER_NODE_BY_ARCH = {"genoa": 2, "mi250": 1}
+DEFAULT_WORKER_RANKS_PER_NODE = 2
 
 
-def configure_persee(args):
-    """Resolve the toolchains/persee/<arch>/environment.sh and venv activate paths from args."""
-    global PERSEE_ENV_SCRIPT, PERSEE_VENV_ACTIVATE
-    PERSEE_ENV_SCRIPT = os.path.join(BASE_DIR, "toolchains", "persee", args.arch.lower(), "environment.sh")
+def resolve_site():
+    """Which toolchains/<site>/ subtree we're on: 'adastra' if sbatch is available, else 'persee'."""
+    return "adastra" if shutil.which("sbatch") is not None else "persee"
+
+
+def configure_toolchain(args):
+    """Resolve the toolchains/<site>/<arch>/environment.sh and venv activate paths from --arch/--venv."""
+    global ENV_SCRIPT, VENV_ACTIVATE
+    ENV_SCRIPT = os.path.join(BASE_DIR, "toolchains", resolve_site(), args.arch.lower(), "environment.sh")
     venv_dir = os.path.abspath(args.venv) if args.venv else os.path.join(BASE_DIR, ".gys_env")
-    PERSEE_VENV_ACTIVATE = os.path.join(venv_dir, "bin", "activate")
+    VENV_ACTIVATE = os.path.join(venv_dir, "bin", "activate")
+
+
+def on_adastra():
+    """sbatch on PATH and not already inside a job => submit ourselves as a batch job."""
+    return resolve_site() == "adastra" and "SLURM_JOB_ID" not in os.environ
+
+
+def effective_n_workers(args):
+    """Dask worker process count: explicit --dask-workers, else 1 rank/socket by --arch on Adastra, else 1."""
+    if args.dask_workers is not None:
+        return args.dask_workers
+    if resolve_site() == "adastra":
+        return WORKER_RANKS_PER_NODE_BY_ARCH.get(args.arch.lower(), DEFAULT_WORKER_RANKS_PER_NODE)
+    return 1
+
+
+def resolve_role_nodes():
+    """(scheduler_node, worker_node, sim_node) from the current Slurm allocation, or all-None outside one."""
+    nodelist = os.environ.get("SLURM_JOB_NODELIST")
+    if not nodelist:
+        return None, None, None
+
+    result = subprocess.run(
+        ["scontrol", "show", "hostnames", nodelist], capture_output=True, text=True, check=True
+    )
+    nodes = [h for h in result.stdout.split() if h]
+    if len(nodes) < 3:
+        raise RuntimeError(
+            f"Need 3 distinct nodes (scheduler, worker, simulation); "
+            f"allocation only has {len(nodes)}. Check ADASTRA_NODES / #SBATCH --nodes."
+        )
+    return nodes[0], nodes[1], nodes[2]
 
 
 def parse_args():
@@ -80,8 +128,14 @@ def parse_args():
     parser.add_argument(
         "--dask-workers",
         type=int,
-        default=1,
-        help="Number of Dask workers to launch per simulation segment (default: 1).",
+        default=None,
+        help=(
+            "Number of Dask worker processes to launch on the dedicated "
+            "Dask worker node. If not given: on Adastra, defaults to 1 "
+            "rank per CPU socket for --arch "
+            f"({WORKER_RANKS_PER_NODE_BY_ARCH}, or {DEFAULT_WORKER_RANKS_PER_NODE} "
+            "for an unlisted --arch); on persee, defaults to 1."
+        ),
     )
 
     parser.add_argument(
@@ -94,20 +148,30 @@ def parse_args():
 
     parser.add_argument(
         "--arch",
-        default="xeon",
-        choices=["xeon", "v100"],
+        default="GENOA" if resolve_site() == "adastra" else "xeon",
         help=(
-            "Persee arch/toolchain to activate: toolchains/persee/<arch>/"
-            "environment.sh. Default: xeon."
+            "Node arch/toolchain to activate: toolchains/<site>/<arch>/"
+            "environment.sh, where <site> is 'adastra' or 'persee' depending on "
+            "the current machine. On Adastra, also used for 'srun/#SBATCH "
+            "--constraint=' and to pick the Dask worker's rank count. "
+            "Default: GENOA on Adastra, xeon on persee."
         ),
+    )
+
+    parser.add_argument(
+        "--time",
+        default="01:00:00",
+        help="Time limit for the Adastra batch job (HH:MM:SS). Default: 01:00:00.",
     )
 
     parser.add_argument(
         "--venv",
         default=None,
         help=(
-            "Path (relative or absolute) to the venv directory "
-            "to activate alongside the persee toolchain"
+            "Path (relative or absolute) to the personal venv directory "
+            "to activate alongside the toolchain -- its bin/activate is "
+            "sourced automatically, just point this at the venv directory "
+            "itself. Default: '.gys_env' at the repo root."
         ),
     )
 
@@ -134,7 +198,8 @@ def create_or_select_run_dir(requested_run_dir=None, overwrite=False):
         if not os.path.isdir(run_dir):
             raise RuntimeError(f"Requested run path exists but is not a directory: {run_dir}")
 
-        if os.listdir(run_dir) and not overwrite:
+        contents = [e for e in os.listdir(run_dir) if e not in ("batch.log", "submit.sbatch")]
+        if contents and not overwrite:
             raise RuntimeError(
                 f"Run directory already exists and is not empty: {run_dir}\n"
                 "Use --overwrite if you intentionally want to write into it."
@@ -214,15 +279,6 @@ def assert_iterations_are_diagnostic_outputs(iter_total, compression_period, nbs
         )
 
 
-def format_param_summary(metrics):
-    params = metrics.get("params") or {}
-
-    if not params:
-        return "no parameters"
-
-    return ", ".join(f"{key}={value}" for key, value in params.items())
-
-
 def create_yaml_override(
     base_yaml_path,
     output_yaml_path,
@@ -257,20 +313,18 @@ def create_yaml_override(
 # ------------------------------------------------------------------
 
 def load_deisa_env():
-    """Source a toolchain environment.sh + personal venv directly and capture the
-    resulting environment."""
-
-    if not os.path.exists(PERSEE_ENV_SCRIPT):
+    """Source the toolchain environment.sh + personal venv and capture the resulting environment."""
+    if not os.path.exists(ENV_SCRIPT):
         raise RuntimeError(
-            f"Toolchain environment script not found: {PERSEE_ENV_SCRIPT}\n"
-            "Check --arch matches an existing toolchains/persee/<arch>/ "
+            f"Toolchain environment script not found: {ENV_SCRIPT}\n"
+            "Check --arch matches an existing toolchains/<site>/<arch>/ directory."
         )
 
-    source_cmds = f'. "{PERSEE_ENV_SCRIPT}" 1>&2'
-    if os.path.isfile(PERSEE_VENV_ACTIVATE):
-        source_cmds += f' && . "{PERSEE_VENV_ACTIVATE}" 1>&2'
+    source_cmds = f'. "{ENV_SCRIPT}" 1>&2'
+    if os.path.isfile(VENV_ACTIVATE):
+        source_cmds += f' && . "{VENV_ACTIVATE}" 1>&2'
     else:
-        print(f"[Warning] Personal venv not found at {PERSEE_VENV_ACTIVATE}; skipping.")
+        print(f"[Warning] Personal venv not found at {VENV_ACTIVATE}; skipping.")
 
     result = subprocess.run(
         ["bash", "-c",
@@ -283,13 +337,23 @@ def load_deisa_env():
     return json.loads(result.stdout)
 
 
+def _node_launch_prefix(node):
+    """srun prefix to run a single process on a specific node, or [] to just run locally."""
+    if node is None:
+        return []
+    return ["srun", "-w", node, "-N", "1", "--ntasks-per-node", "1", "--overlap"]
+
+
 def start_dask(deisa_env, n_workers=1):
-    """Start Dask scheduler and workers. Returns (sch_proc, worker_proc, updated_env)."""
+    """Start the Dask scheduler and worker(s), each on their own dedicated node.
+    Returns (sch_proc, worker_proc, updated_env)."""
     if os.path.exists(SCHEFILE):
         os.remove(SCHEFILE)
 
+    scheduler_node, worker_node, _ = resolve_role_nodes()
+
     sch_proc = subprocess.Popen(
-        [
+        _node_launch_prefix(scheduler_node) + [
             "dask-scheduler",
             f"--scheduler-file={SCHEFILE}",
             "--port", "0",
@@ -315,7 +379,7 @@ def start_dask(deisa_env, n_workers=1):
     deisa_env["DEISA_DASK_SCHEDULER_ADDRESS"] = scheduler_address
 
     worker_proc = subprocess.Popen(
-        [
+        _node_launch_prefix(worker_node) + [
             "dask-worker",
             f"--nworkers={n_workers}",
             "--local-directory=/tmp",
@@ -353,6 +417,18 @@ def print_branch_banner(branch_name):
     print()
 
 
+def sim_launch_prefix():
+    """argv prefix to launch gys_compress: srun on the dedicated sim node inside our Adastra job, else mpirun."""
+    if "SLURM_JOB_ID" in os.environ:
+        _, _, sim_node = resolve_role_nodes()
+        prefix = ["srun"]
+        if sim_node:
+            prefix += ["-w", sim_node]
+        prefix += ["-N", "1", "--ntasks-per-node", str(ADASTRA_N_PROCS), "--overlap"]
+        return prefix
+    return ["mpirun", "-n", "4"]
+
+
 def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1, extra_env=None):
     """Start Dask, run simulation and diagnostics in parallel, stop Dask.
 
@@ -370,10 +446,10 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
         deisa_env.update({k: str(v) for k, v in extra_env.items()})
 
     try:
-        exec_path = os.path.abspath(EXEC_CMD[-1])
+        exec_path = os.path.abspath(GYS_COMPRESS_BIN)
         abs_gysela = os.path.abspath(gysela_yaml)
         abs_pdi = os.path.abspath(pdi_yaml)
-        sim_cmd = EXEC_CMD[:-1] + [exec_path, abs_gysela, abs_pdi]
+        sim_cmd = sim_launch_prefix() + [exec_path, abs_gysela, abs_pdi]
 
         analytics_proc = subprocess.Popen(
             ["python3", ANALYTICS_SCRIPT],
@@ -533,10 +609,104 @@ def compare_results(run_dir):
     plot_diags(diag_files, output=output)
 
 
-def main():
-    args = parse_args()
-    configure_persee(args)
+# ------------------------------------------------------------------
+# Adastra batch submission
+# ------------------------------------------------------------------
 
+def _job_is_active(job_id):
+    result = subprocess.run(["squeue", "-j", job_id, "-h"], capture_output=True, text=True)
+    return bool(result.stdout.strip())
+
+
+def _get_job_state(job_id):
+    result = subprocess.run(
+        ["sacct", "-j", job_id, "--format=State", "--noheader", "-X"],
+        capture_output=True, text=True,
+    )
+    lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+    return lines[0] if lines else None
+
+
+def _stream_until_job_done(job_id, log_path):
+    """Print new lines from log_path as they're written, until the job leaves the queue."""
+    pos = 0
+    while True:
+        if os.path.exists(log_path):
+            with open(log_path) as f:
+                f.seek(pos)
+                chunk = f.read()
+                if chunk:
+                    print(chunk, end="", flush=True)
+                    pos = f.tell()
+        if not _job_is_active(job_id):
+            break
+        time.sleep(2)
+
+    if os.path.exists(log_path):
+        with open(log_path) as f:
+            f.seek(pos)
+            print(f.read(), end="", flush=True)
+
+
+def submit_batch_and_wait(args):
+    """Submit ourselves as a single sbatch job on Adastra, then stream its output until it finishes."""
+    account = os.environ.get("ACTIVE_PROJECT")
+    if account:
+        print(f"[Account] Using Slurm account: {account}")
+
+    run_dir = create_or_select_run_dir(requested_run_dir=args.run_dir, overwrite=args.overwrite)
+    print(f"Master directory initialised: {run_dir}")
+
+    log_path = os.path.join(run_dir, "batch.log")
+    script_path = os.path.join(run_dir, "submit.sbatch")
+
+    forwarded = [shutil.which("python3") or "python3", os.path.abspath(__file__), run_dir]
+    if args.overwrite:
+        forwarded.append("--overwrite")
+    if args.keep_pdi_copy:
+        forwarded.append("--keep-pdi-copy")
+    if args.online:
+        forwarded.append("--online")
+    if args.dask_workers is not None:
+        forwarded += ["--dask-workers", str(args.dask_workers)]
+    forwarded += ["--arch", args.arch]
+    if args.venv:
+        forwarded += ["--venv", args.venv]
+
+    n_workers = effective_n_workers(args)
+    max_ranks_per_node = max(ADASTRA_N_PROCS, n_workers, 1)
+
+    sbatch_lines = [
+        "#!/bin/bash",
+        "#SBATCH --job-name=gys-compression-benchmark",
+        f"#SBATCH --nodes={ADASTRA_NODES}",
+        f"#SBATCH --ntasks-per-node={max_ranks_per_node}",
+        f"#SBATCH --time={args.time}",
+        f"#SBATCH --constraint={args.arch}",
+        f"#SBATCH --output={log_path}",
+        f"#SBATCH --error={log_path}",
+    ]
+    if account:
+        sbatch_lines.append(f"#SBATCH --account={account}")
+    sbatch_lines += ["", " ".join(f'"{a}"' for a in forwarded)]
+
+    with open(script_path, "w") as f:
+        f.write("\n".join(sbatch_lines) + "\n")
+
+    print(f"[Batch] Submitting {script_path}")
+    result = subprocess.run(["sbatch", script_path], capture_output=True, text=True, check=True)
+    print(f"  {result.stdout.strip()}")
+    job_id = result.stdout.strip().split()[-1]
+
+    print(f"[Batch] Streaming {log_path} until job {job_id} finishes...\n")
+    _stream_until_job_done(job_id, log_path)
+
+    state = _get_job_state(job_id)
+    if state and not state.startswith("COMPLETED"):
+        raise RuntimeError(f"Batch job {job_id} finished with state {state} (see {log_path}).")
+
+
+def run_pipeline(args):
     assert_file_exists(SOURCE_GYSELA_YAML, "base GYSELA input template")
     assert_file_exists(SOURCE_PDI_YAML, "base PDI input template")
     assert_file_exists(ANALYTICS_SCRIPT, "in-situ diagnostics script")
@@ -570,6 +740,8 @@ def main():
     print(f"Compression period K   : {compression_period}")
     print(f"Diagnostic step        : {nbstep_diag}")
 
+    n_workers = effective_n_workers(args)
+
     if args.overwrite:
         print("\n--- Skipping reference simulation (--overwrite): reusing existing baseline ---")
     else:
@@ -577,7 +749,7 @@ def main():
             run_dir=run_dir,
             run_pdi_yaml=run_pdi_yaml,
             iter_total=iter_total,
-            n_workers=args.dask_workers,
+            n_workers=n_workers,
         )
 
     if args.online:
@@ -586,7 +758,7 @@ def main():
             run_pdi_yaml=run_pdi_yaml,
             iter_total=iter_total,
             compression_period=compression_period,
-            n_workers=args.dask_workers,
+            n_workers=n_workers,
         )
     else:
         run_offline_compressed_branch(
@@ -595,7 +767,7 @@ def main():
             iter_total=iter_total,
             compression_period=compression_period,
             mesh_kwargs=mesh_kwargs,
-            n_workers=args.dask_workers,
+            n_workers=n_workers,
         )
 
     if not args.keep_pdi_copy:
@@ -605,6 +777,17 @@ def main():
     return run_dir
 
 
-if __name__ == "__main__":
-    run_dir = main()
+def main():
+    args = parse_args()
+    configure_toolchain(args)
+
+    if on_adastra():
+        submit_batch_and_wait(args)
+        return
+
+    run_dir = run_pipeline(args)
     compare_results(run_dir)
+
+
+if __name__ == "__main__":
+    main()

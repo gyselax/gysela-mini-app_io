@@ -145,6 +145,11 @@ def evaluate_rank(data_dir, it, rank, species=0):
     inputs = OnlineNeuralNetworkCompressor._build_local_inputs(nx, ny, nvx, nvy)
     recon = np.asarray(jax.vmap(model)(inputs)).reshape(nx, ny, nvx, nvy)
     target = payload["target"][species]
+    plt.figure()
+    plt.pcolormesh(target[:,16,:, 16])
+    plt.savefig("target.png")
+    plt.show()
+    
 
     return payload, target, recon
 
@@ -250,12 +255,11 @@ def _rank_box_in_plane(offset, shape, plane):
     return offset[a0] - 0.5, offset[a1] - 0.5, shape[a0], shape[a1]
 
 
-def _plot_row(fig, axs_row, target_2d, recon_2d, axes_labels, title_prefix, boxes=None, frame_color=None):
+def _plot_row(fig, axs_row, target_2d, recon_2d, axes_labels, title_prefix, column_ranges, boxes=None, frame_color=None):
     diff_2d = recon_2d - target_2d
-    vmin, vmax = float(target_2d.min()), float(target_2d.max())
     for ax, data, label in zip(axs_row, [target_2d, recon_2d, diff_2d], ["target", "reconstruction", "error"]):
-        vkw = dict(vmin=vmin, vmax=vmax) if label != "error" else {}
-        im = ax.imshow(np.asarray(data).T, origin="lower", aspect="auto", **vkw)
+        vmin, vmax = column_ranges[label]
+        im = ax.imshow(np.asarray(data).T, origin="lower", aspect="auto", vmin=vmin, vmax=vmax)
         ax.set_title(f"{title_prefix}: {label}")
         ax.set_xlabel(axes_labels[0])
         ax.set_ylabel(axes_labels[1])
@@ -278,21 +282,47 @@ def plot_combined(local_entries, global_target, global_recon, it, plane="xvx", o
 
     local_entries: list of (rank, target, recon, box, color) tuples, one per
     requested rank, in the order their rows should appear.
+
+    Each of the 3 columns (target, reconstruction, error) gets its own colorbar
+    range, shared across every row so the global assembly and each rank's local
+    network are directly comparable within that column -- but target,
+    reconstruction, and error are not forced onto the same range as each other.
     """
     global_t2d, axes_labels = _slice_2d(global_target, plane=plane)
     global_r2d, _ = _slice_2d(global_recon, plane=plane)
 
-    n_rows = 1 + len(local_entries)
+    local_slices = [
+        (rank, *_slice_2d(target, plane=plane)[:1], _slice_2d(recon, plane=plane)[0], box, color)
+        for rank, target, recon, box, color in local_entries
+    ]
+
+    def _range(arrays):
+        return (min(float(np.min(a)) for a in arrays), max(float(np.max(a)) for a in arrays))
+
+    all_targets = [global_t2d] + [t2d for _, t2d, _, _, _ in local_slices]
+    all_recons = [global_r2d] + [r2d for _, _, r2d, _, _ in local_slices]
+    all_diffs = [global_r2d - global_t2d] + [r2d - t2d for _, t2d, r2d, _, _ in local_slices]
+    column_ranges = {
+        "target": _range(all_targets),
+        "reconstruction": _range(all_recons),
+        "error": _range(all_diffs),
+    }
+
+    n_rows = 1 + len(local_slices)
     fig, axs = plt.subplots(n_rows, 3, figsize=(15, 4 * n_rows))
     axs = np.atleast_2d(axs)
 
     boxes = [(box, color) for _, _, _, box, color in local_entries if box is not None]
-    _plot_row(fig, axs[0], global_t2d, global_r2d, axes_labels, f"global (iter={it}, all ranks)", boxes=boxes)
+    _plot_row(
+        fig, axs[0], global_t2d, global_r2d, axes_labels, f"global (iter={it}, all ranks)",
+        column_ranges, boxes=boxes,
+    )
 
-    for row, (rank, target, recon, _, color) in enumerate(local_entries, start=1):
-        t2d, _ = _slice_2d(target, plane=plane)
-        r2d, _ = _slice_2d(recon, plane=plane)
-        _plot_row(fig, axs[row], t2d, r2d, axes_labels, f"local (iter={it}, rank={rank})", frame_color=color)
+    for row, (rank, t2d, r2d, _, color) in enumerate(local_slices, start=1):
+        _plot_row(
+            fig, axs[row], t2d, r2d, axes_labels, f"local (iter={it}, rank={rank})",
+            column_ranges, frame_color=color,
+        )
 
     fig.tight_layout()
 
@@ -323,6 +353,7 @@ def run_online_networks(data_dir, it, ranks=None, species=0, plane="xvx"):
     local_entries = []
     for i, rank in enumerate(ranks):
         _, target, recon = evaluate_rank(data_dir, it, rank, species=species)
+
         color = _color_for_index(i)
         box = _rank_box_in_plane(*rank_regions[rank], plane) if rank in rank_regions else None
         local_entries.append((rank, target, recon, box, color))

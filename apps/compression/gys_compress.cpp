@@ -141,9 +141,9 @@ void init_two_stream(
           double const vx = ddc::coordinate(ddc::select<GridVx>(ivxvy));
           double const vy = ddc::coordinate(ddc::select<GridVy>(ivxvy));
           double const m1 = Kokkos::exp(
-              -((vx - v0) * (vx - v0) + (vy - v0) * (vy - v0)) / 2.);
+              -((vx - v0) * (vx - v0) + (vy ) * (vy )) / 2.);
           double const m2 = Kokkos::exp(
-              -((vx + v0) * (vx + v0) + (vy + v0) * (vy + v0)) / 2.);
+              -((vx + v0) * (vx + v0) + (vy ) * (vy )) / 2.);
           allfequilibrium_field(isp, ivxvy) = 0.5 * inv_2pi * (m1 + m2);
         });
 

@@ -109,9 +109,10 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--arch", 
+        "--arch-nn", 
         type=str, 
         default="periodic_siren_deep_128",
+        dest="arch_nn",
         choices=["periodic_siren_deep_128", "periodic_fourier_mlp_deep_128"],
         help="INR architecture (if --compression NN)"
     )
@@ -193,19 +194,19 @@ def read_mesh_config(config):
 def read_benchmark_config(config):
     try:
         iter_total = int(config["Algorithm"]["nbiter"])
-        compression_period = int(config["CompressionBenchmark"]["compression_period"])
+        compression_period = int(config["compression"]["compression_period"])
     except KeyError as exc:
         raise RuntimeError(
             "Missing required benchmark parameter in the GYSELA input template "
             f"({os.path.basename(SOURCE_GYSELA_YAML)}). "
-            "Expected Algorithm.nbiter and CompressionBenchmark.compression_period."
+            "Expected Algorithm.nbiter and compression.compression_period."
         ) from exc
 
     if iter_total <= 0:
         raise RuntimeError(f"Algorithm.nbiter must be positive. Got {iter_total}.")
 
     if compression_period <= 0:
-        raise RuntimeError(f"CompressionBenchmark.compression_period must be positive. " f"Got {compression_period}.")
+        raise RuntimeError(f"compression.compression_period must be positive. " f"Got {compression_period}.")
 
     if compression_period >= iter_total:
         raise RuntimeError(
@@ -608,25 +609,30 @@ def main():
     print(f"Compression period K   : {compression_period}")
     print(f"Diagnostic step        : {nbstep_diag}")
     
+    comp_cfg = base_cfg.get("compression", {})
+    selected_method = args.compression if args.compression else comp_cfg.get("method", "PCA")
     method_override = None
-    if args.compression == "POD":
+    
+    if selected_method in ["POD", "PCA"]:
+        pod_cfg = comp_cfg.get("POD", {})
         method_override = {
             "class": "PCA",
             "params": {
-                "n_components": args.rank,
-                "normalisation": "none",
-                "clip_nonnegative": False,
+                "n_components": args.rank if args.rank else pod_cfg.get("n_components", 32),
+                "normalisation": pod_cfg.get("normalisation", "none"),
+                "clip_nonnegative": pod_cfg.get("clip_nonnegative", False),
             }
-        } 
-    elif args.compression == "NN":
+        }
+    elif selected_method == "NN":
+        nn_cfg = comp_cfg.get("NN", {})
         method_override = {
             "class": "NeuralNetwork",
             "params": {
-                "arch": args.arch,
-                "lr": 1e-3,
-                "max_iters": 2000,
-                "batch_size": 2000,
-                "lbfgs_iters": 50,
+                "arch": args.arch_nn if getattr(args, 'arch_nn', None) else nn_cfg.get("arch", "periodic_siren_deep_128"),
+                "lr": float(nn_cfg.get("lr", 1e-3)),
+                "max_iters": int(nn_cfg.get("max_iters", 2000)),
+                "batch_size": int(nn_cfg.get("batch_size", 2000)),
+                "lbfgs_iters": int(nn_cfg.get("lbfgs_iters", 50)),
             }
         }
 

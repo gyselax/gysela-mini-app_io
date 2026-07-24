@@ -10,8 +10,10 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 from compression_methods.neural_network import (
+    AVAILABLE_INR_ARCHS,
     OnlineNeuralNetworkCompressor,
     assemble_global_field,
+    continue_training_offline,
     load_online_params,
 )
 
@@ -362,6 +364,47 @@ def run_online_networks(data_dir, it, ranks=None, species=0, plane="xvx"):
     plot_combined(local_entries, global_target, global_recon, it=it, plane=plane, output=out)
 
 
+# Offline fine-tuning (continue saved online networks without rerunning the simulation)
+
+
+def finetune_rank_offline(data_dir, it, rank, out_dir=None, out_iter=None, **kwargs):
+    """Continue one rank's saved online INR(s) offline against its saved
+    target data (see `continue_training_offline`), then optionally save the
+    result as a new params_iterXXXXX_rankXXX.npz -- same file layout as the
+    online pipeline, so `evaluate_rank` / `run_online_networks` can load and
+    plot the fine-tuned checkpoint unchanged.
+    """
+    path = os.path.join(data_dir, f"params_iter{it:05d}_rank{rank:03d}.npz")
+    payload = load_online_params(path)
+    result = continue_training_offline(payload, **kwargs)
+
+    if out_dir is not None:
+        save_it = out_iter if out_iter is not None else it
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"params_iter{save_it:05d}_rank{rank:03d}.npz")
+        result["compressor"].save_params(out_path, rank=rank, timestep=save_it)
+        print(f"Fine-tuned params written to: {out_path}")
+
+    return result
+
+
+def finetune_offline(data_dir, it, ranks=None, out_dir=None, out_iter=None, **kwargs):
+    """Continue training every (or selected) rank's saved online INR(s)
+    offline against its own already-captured local target data -- the full
+    distributed pipeline's per-rank fits, run standalone without the
+    simulation. `ranks=None` uses every rank found for this iteration.
+    """
+    if ranks is None:
+        paths = _find_rank_files(data_dir, it)
+        ranks = sorted(int(os.path.basename(p).rsplit("_rank", 1)[1].split(".")[0]) for p in paths)
+
+    results = {}
+    for rank in ranks:
+        print(f"=== rank {rank} ===", flush=True)
+        results[rank] = finetune_rank_offline(data_dir, it, rank, out_dir=out_dir, out_iter=out_iter, **kwargs)
+    return results
+
+
 # CLI
 
 
@@ -390,7 +433,58 @@ def parse_args():
         "--plane", choices=["xvx", "xy", "vxvy"], default="xvx", help="2D slice plane to plot (default: xvx).",
     )
 
-    return parser.parse_args()
+    finetune_parser = subparsers.add_parser(
+        "finetune-offline",
+        help="Continue training saved online INR networks against their saved target data, "
+        "without rerunning the simulation.",
+    )
+    finetune_parser.add_argument("data_dir", help="Directory containing params_iterXXXXX_rankXXX.npz files.")
+    finetune_parser.add_argument("--iter", type=int, required=True, help="Saved iteration/timestep to load.")
+    finetune_parser.add_argument(
+        "--rank", type=int, nargs="+", default=None,
+        help="Rank(s) to fine-tune. Omit to use every rank found for this iteration.",
+    )
+    finetune_parser.add_argument(
+        "--iters-adam", type=int, default=2000, help="Total ADAM steps to run (default: 2000).",
+    )
+    finetune_parser.add_argument(
+        "--iters-lbfgs", type=int, default=10, help="Total L-BFGS steps to run (default: 10).",
+    )
+    finetune_parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (default: 1e-3).")
+    finetune_parser.add_argument(
+        "--arch", default=None, choices=AVAILABLE_INR_ARCHS,
+        help="Architecture to train. Default: reuse the saved arch, warm-started from the saved "
+        "weights. A different arch trains fresh models of that arch from scratch on the same "
+        "saved target data (architecture search).",
+    )
+    finetune_parser.add_argument(
+        "--no-warm-start", action="store_true",
+        help="Ignore saved weights and start from a fresh random init (still trains on the saved target data).",
+    )
+    finetune_parser.add_argument(
+        "--species", type=int, nargs="+", default=None,
+        help="Species indices to fine-tune. Omit to fine-tune every species.",
+    )
+    finetune_parser.add_argument(
+        "--out-dir", default=None, help="Directory to write fine-tuned params_iterXXXXX_rankXXX.npz files to. "
+        "Omit (without --overwrite) to skip saving.",
+    )
+    finetune_parser.add_argument(
+        "--out-iter", type=int, default=None,
+        help="Iteration tag for saved output files (default: same as --iter -- pass a different "
+        "value to avoid overwriting the original checkpoint).",
+    )
+    finetune_parser.add_argument(
+        "--overwrite", action="store_true",
+        help="Save fine-tuned params back into data_dir at the same --iter, in place of the "
+        "original checkpoint. Shorthand for --out-dir <data_dir> --out-iter <iter>; "
+        "mutually exclusive with --out-dir/--out-iter.",
+    )
+
+    args = parser.parse_args()
+    if args.command == "finetune-offline" and args.overwrite and (args.out_dir is not None or args.out_iter is not None):
+        parser.error("--overwrite is mutually exclusive with --out-dir/--out-iter")
+    return args
 
 
 def main():
@@ -401,6 +495,16 @@ def main():
     elif args.command == "online-networks":
         run_online_networks(
             args.data_dir, args.iter, ranks=args.rank, species=args.species, plane=args.plane,
+        )
+    elif args.command == "finetune-offline":
+        out_dir = args.data_dir if args.overwrite else args.out_dir
+        out_iter = args.iter if args.overwrite else args.out_iter
+        finetune_offline(
+            args.data_dir, args.iter,
+            ranks=args.rank, out_dir=out_dir, out_iter=out_iter,
+            arch=args.arch, species=args.species, lr=args.lr,
+            iters_adam=args.iters_adam, iters_lbfgs=args.iters_lbfgs,
+            warm_start=not args.no_warm_start,
         )
 
 

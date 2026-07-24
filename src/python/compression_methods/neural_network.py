@@ -1,22 +1,55 @@
-
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+
+def _default_jax_platforms() -> str:
+    """Pick a JAX backend that works on this machine.
+
+    jaxlib's CUDA 13 plugin ships a ptxas that cannot target sm_70 (V100).
+    Fall back to CPU unless the user sets JAX_PLATFORMS explicitly.
+    """
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        caps = [float(line.strip()) for line in out.splitlines() if line.strip()]
+        if caps and max(caps) >= 8.0:
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+if "JAX_PLATFORMS" not in os.environ:
+    os.environ["JAX_PLATFORMS"] = _default_jax_platforms()
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.flatten_util import ravel_pytree
+from tqdm import tqdm
 
 from scimba_jax.nonlinear_approximation.networks.mlp import MLP
 from scimba_jax.nonlinear_approximation.optimizers.optimizers import (ScimbaAdam, ScimbaLBfgs)
 
-from Compressor import Compressor 
+from Compressor import Compressor
 
 jax.config.update("jax_enable_x64", True)
+
+
+def _training_progress(n_iters: int, desc: str, verbose: bool):
+    """tqdm progress bar (iteration count, elapsed/ETA, rate) over a training
+    loop; live loss is attached per-step via `pbar.set_postfix(...)`. A no-op
+    passthrough when `verbose` is False so silent runs pay no overhead.
+    """
+    return tqdm(range(n_iters), desc=desc, disable=not verbose, leave=True, dynamic_ncols=True)
 
 def periodic_embedding(x_input: jnp.ndarray) -> jnp.ndarray:
     """Embed raw (x, y, vx, vy) into periodic features for x and y only.
@@ -287,41 +320,46 @@ class NeuralNetworkCompressor(Compressor):
         
         total_points = inputs.shape[0]
         loss_history = []
-        
+        best_model, best_loss = model, float("inf")
+
         #Phase 1: ADAM, mini-batches
         adam_opt = ScimbaAdam(model, _losses_function, learning_rate=self.lr)
-        for i in range(self.max_iters):
+        pbar = _training_progress(self.max_iters, f"[INR/{self.arch}][ADAM]", self.verbose)
+        for i in pbar:
             key, subkey = jax.random.split(key)
             batch_idx = jax.random.choice(subkey, total_points, shape=(self.batch_size,), replace=False)
             batch = (inputs[batch_idx], targets[batch_idx])
-            
+
             loss_dict, model, adam_opt = adam_opt.update(model, batch)
             loss_val = float(loss_dict["total"])
             loss_history.append(loss_val)
-            
-            if self.verbose and i % 100 == 0:
-                 print(f"  [INR/{self.arch}][ADAM] iter {i:4d} - loss: {loss_val:.2e}")
+            pbar.set_postfix(loss=f"{loss_val:.2e}")
+
+            if loss_val < best_loss:
+                best_model, best_loss = model, loss_val
+
             if loss_val < self.threshold:
-                if self.verbose:
-                    print(f"  [INR/{self.arch}][ADAM] early convergence at iter {i}")
+                pbar.write(f"  [INR/{self.arch}][ADAM] early convergence at iter {i}")
                 break
-        
+
         #Phase 2: L-BFGS, full-batch
         full_batch = (inputs, targets)
         lbfgs_opt = ScimbaLBfgs(model, _losses_function)
-        for i in range(self.lbfgs_iters):
+        pbar = _training_progress(self.lbfgs_iters, f"[INR/{self.arch}][L-BFGS]", self.verbose)
+        for i in pbar:
             loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
             loss_val = float(loss_dict["total"])
             loss_history.append(loss_val)
-            
-            if self.verbose and (i % 10 == 0 or i == self.lbfgs_iters - 1):
-                print(f"  [INR/{self.arch}][L-BFGS] iter {i:3d} - loss: {loss_val:.2e}")
+            pbar.set_postfix(loss=f"{loss_val:.2e}")
+
+            if loss_val < best_loss:
+                best_model, best_loss = model, loss_val
+
             if loss_val < self.threshold:
-                if self.verbose:
-                    print(f"  [INR/{self.arch}][L-BFGS] convergence at iter {i}")
+                pbar.write(f"  [INR/{self.arch}][L-BFGS] convergence at iter {i}")
                 break
-            
-        return model, jnp.array(loss_history)
+
+        return best_model, jnp.array(loss_history)
     
     # Compressor interface
     
@@ -353,8 +391,8 @@ class NeuralNetworkCompressor(Compressor):
             
             if self.verbose:
                 print(
-                    f"[INR/{self.arch}] species {isp}: final loss "
-                    f"{float(loss_hist[-1]):.2e} ({t1 - t0:.2f}s)"
+                    f"[INR/{self.arch}] species {isp}: best loss "
+                    f"{float(jnp.min(loss_hist)):.2e} ({t1 - t0:.2f}s)"
                 )
             
             self.models.append(model)
@@ -398,7 +436,7 @@ class NeuralNetworkCompressor(Compressor):
         
     def get_extra_metrics(self) -> dict:
         return {
-            "final_loss_per_species": [float(h[-1]) for h in self.loss_histories] if self.loss_histories else None,
+            "final_loss_per_species": [float(jnp.min(h)) for h in self.loss_histories] if self.loss_histories else None,
             "n_train_steps_per_species": [int(h.shape[0]) for h in self.loss_histories] if self.loss_histories else None,
         }
 
@@ -494,14 +532,17 @@ class OnlineNeuralNetworkCompressor:
         return jnp.stack([Xg.ravel(), Yg.ravel(), VXg.ravel(), VYg.ravel()], axis=-1)
 
     def _fit_one_species(
-        self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int
+        self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int,
+        desc: str = "",
     ):
         total_points = inputs.shape[0]
         bs = min(self.batch_size, total_points) if self.batch_size is not None else total_points
         loss_val = None
+        best_model, best_loss = model, float("inf")
 
         # Phase 1: ADAM, warm-started across calls, mini-batches
-        for _ in range(n_iters_adam):
+        pbar = _training_progress(n_iters_adam, f"{desc}[ADAM]", self.verbose)
+        for _ in pbar:
             if bs < total_points:
                 self._key, subkey = jax.random.split(self._key)
                 idx = jax.random.choice(subkey, total_points, shape=(bs,), replace=False)
@@ -511,6 +552,9 @@ class OnlineNeuralNetworkCompressor:
 
             loss_dict, model, opt = opt.update(model, batch)
             loss_val = float(loss_dict["total"])
+            pbar.set_postfix(loss=f"{loss_val:.2e}")
+            if loss_val < best_loss:
+                best_model, best_loss = model, loss_val
             if loss_val < self.threshold:
                 break
 
@@ -519,13 +563,17 @@ class OnlineNeuralNetworkCompressor:
         if n_iters_lbfgs > 0 and (loss_val is None or loss_val >= self.threshold):
             full_batch = (inputs, targets)
             lbfgs_opt = ScimbaLBfgs(model, _losses_function)
-            for _ in range(n_iters_lbfgs):
+            pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS]", self.verbose)
+            for _ in pbar:
                 loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
                 loss_val = float(loss_dict["total"])
+                pbar.set_postfix(loss=f"{loss_val:.2e}")
+                if loss_val < best_loss:
+                    best_model, best_loss = model, loss_val
                 if loss_val < self.threshold:
                     break
 
-        return model, opt, loss_val
+        return best_model, opt, best_loss
 
     def _plot_local_xvx_debug(self, f_orig, f_approx, rank: Optional[int] = None):
         """Save a quick x–vx plot of local original vs reconstruction (species 0)."""
@@ -587,7 +635,8 @@ class OnlineNeuralNetworkCompressor:
         for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
             model, opt, loss_val = self._fit_one_species(
-                self.models[isp], self._opts[isp], inputs, targets, n_iters_adam, n_iters_lbfgs
+                self.models[isp], self._opts[isp], inputs, targets, n_iters_adam, n_iters_lbfgs,
+                desc=f"[OnlineINR/{self.arch}][rank={rank}][sp={isp}]",
             )
             self.models[isp] = model
             self._opts[isp] = opt
@@ -703,6 +752,110 @@ def load_online_params(path: str) -> dict:
         "local_bounds": tuple(local_bounds) if local_bounds is not None else None,
         "models": models,
         "target": np.stack(targets),
+    }
+
+# Offline continuation (fine-tune a saved online network without rerunning the simulation)
+
+
+def continue_training_offline(
+    payload: dict,
+    arch: Optional[str] = None,
+    species: Optional[list] = None,
+    lr: float = 1e-3,
+    iters_adam: int = 1000,
+    iters_lbfgs: int = 50,
+    batch_size: Optional[int] = None,
+    threshold: float = 1e-8,
+    warm_start: bool = True,
+    seed: int = 0,
+    verbose: bool = True,
+) -> dict:
+    """Continue training one rank's saved online INR(s) offline.
+
+    Drives a single `OnlineNeuralNetworkCompressor.compress_decompress_array`
+    call -- the exact fitting routine used in-situ (ADAM warm start + L-BFGS
+    polish), for `iters_adam` + `iters_lbfgs` steps -- directly from a
+    payload already loaded by `load_online_params`, instead of from a live
+    simulation call. This lets you iterate on architecture and training
+    hyperparameters against already-captured local target data without
+    rerunning the distributed simulation: `payload["target"]` is the fixed
+    local ground truth the rank was fit on, and `payload["models"]` /
+    `payload["arch"]` are its saved weights. When `verbose`, a live tqdm
+    progress bar (iteration count, current loss, ETA) tracks each phase --
+    the same progress reporting `_fit_one_species` gives the regular in-situ
+    online path.
+
+    arch: architecture to train. Defaults to the payload's saved arch (warm
+        start from the saved weights). Passing a *different* arch instead
+        trains fresh models of that arch from scratch on the same saved
+        target data -- for architecture search without touching the
+        simulation.
+    species: species indices to fine-tune (default: every species in the
+        payload). Species not selected keep their saved weights untouched.
+    warm_start: if True and `arch` matches the payload's saved arch, continue
+        from the saved weights; if False (or `arch` differs), start the
+        selected species from a fresh random init instead.
+
+    Returns {"models", "final_losses" (species -> final loss), "metrics"
+    (the compress_decompress_array metrics dict), "local_shape",
+    "local_bounds", "arch", "target", "compressor"}. Pass `compressor` to
+    `.save_params(...)` to write a params_iterXXXXX_rankXXX.npz payload the
+    existing evaluate_compression.py tooling (`evaluate_rank`,
+    `run_online_networks`, ...) can load unchanged.
+    """
+    target = payload["target"]
+    n_species = target.shape[0]
+    species_idx = list(range(n_species)) if species is None else list(species)
+
+    use_arch = arch or payload["arch"]
+    reuse_weights = warm_start and use_arch == payload["arch"]
+
+    compressor = OnlineNeuralNetworkCompressor(
+        arch=use_arch,
+        lr=lr,
+        refine_iters_adam=iters_adam,
+        refine_iters_lbfgs=iters_lbfgs,
+        batch_size=batch_size,
+        threshold=threshold,
+        seed=seed,
+        verbose=verbose,
+    )
+    # Pre-populate local_shape/models so compress_decompress_array's
+    # cold_start branch never fires: our own choice of starting weights below
+    # (warm-started or freshly initialized) stays authoritative, and this
+    # call runs exactly `iters_adam` + `iters_lbfgs` steps.
+    compressor.local_shape = payload["local_shape"]
+    compressor.local_bounds = payload["local_bounds"]
+
+    if reuse_weights:
+        compressor.models = list(payload["models"])
+    else:
+        keys = jax.random.split(compressor._key, n_species + 1)
+        compressor._key = keys[0]
+        compressor.models = [
+            get_inr_model(use_arch, keys[isp + 1]) if isp in species_idx else payload["models"][isp]
+            for isp in range(n_species)
+        ]
+    compressor._opts = [
+        ScimbaAdam(compressor.models[isp], _losses_function, learning_rate=lr) for isp in range(n_species)
+    ]
+
+    _, metrics = compressor.compress_decompress_array(
+        target, rank=payload.get("rank"), local_bounds=payload["local_bounds"]
+    )
+    compressor._last_local_array = np.asarray(target)
+
+    final_losses = {isp: metrics["final_loss_per_species"][isp] for isp in species_idx}
+
+    return {
+        "models": compressor.models,
+        "final_losses": final_losses,
+        "metrics": metrics,
+        "local_shape": compressor.local_shape,
+        "local_bounds": compressor.local_bounds,
+        "arch": use_arch,
+        "target": target,
+        "compressor": compressor,
     }
 
 # Global assembly (offline reconstruction / visualization utility)

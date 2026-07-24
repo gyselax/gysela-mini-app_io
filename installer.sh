@@ -61,7 +61,12 @@ else
 fi
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
-python -m pip install -e ".[dev]"
+
+EXTRAS="dev"
+if [[ "${MACHINE}" == persee/* ]]; then
+  EXTRAS="${EXTRAS},cuda12"
+fi
+python -m pip install -e ".[${EXTRAS}]"
 
 
 echo ""

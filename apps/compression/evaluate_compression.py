@@ -18,6 +18,33 @@ from compression_methods.neural_network import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Plot style -- tweak here to resize every figure at once. Current values are
+# sized for paper figures, not screen viewing.
+# ---------------------------------------------------------------------------
+TITLE_FONTSIZE = 18
+AXIS_LABEL_FONTSIZE = 22
+TICK_LABEL_FONTSIZE = 18
+LEGEND_FONTSIZE = 16
+RANK_LABEL_FONTSIZE = 25
+BOX_LINEWIDTH = 6           # global-row rank boxes; local-row frames match this explicitly (not via rcParams --
+                            # axes.linewidth would also thicken the global row's own (uncolored) axes border)
+DIAG_FIG_WIDTH = 12         # inches, plot_diags figure width
+DIAG_ROW_HEIGHT = 3.5       # inches per row, plot_diags figure
+COMBINED_COL_WIDTH = 5    # inches per column, plot_combined figure
+COMBINED_ROW_HEIGHT = 4   # inches per row, plot_combined figure
+
+plt.rcParams.update({
+    "font.size": TICK_LABEL_FONTSIZE,
+    "axes.titlesize": TITLE_FONTSIZE,
+    "axes.labelsize": AXIS_LABEL_FONTSIZE,
+    "xtick.labelsize": TICK_LABEL_FONTSIZE,
+    "ytick.labelsize": TICK_LABEL_FONTSIZE,
+    "legend.fontsize": LEGEND_FONTSIZE,
+    "patch.linewidth": BOX_LINEWIDTH,
+})
+
+
 RAW_QUANTITIES = [
     ("ekin", r"$\mathcal{E}_{kin}$"),
     ("epot", r"$\mathcal{E}_{pot}$"),
@@ -67,7 +94,7 @@ def plot_diags(diags_filenames, output=None):
         datasets.append((label, data))
 
     n = len(RAW_QUANTITIES) + len(CONSERVED_QUANTITIES)
-    fig, axs = plt.subplots(n, 1, figsize=(10, 3 * n), sharex=True)
+    fig, axs = plt.subplots(n, 1, figsize=(DIAG_FIG_WIDTH, DIAG_ROW_HEIGHT * n), sharex=True)
 
     for ax, (col, ylabel) in zip(axs, RAW_QUANTITIES):
         for label, data in datasets:
@@ -77,7 +104,7 @@ def plot_diags(diags_filenames, output=None):
         ax.set_ylabel(ylabel)
         ax.grid(True, which="both")
         if len(datasets) > 1:
-            ax.legend(fontsize=8)
+            ax.legend()
 
     for ax, (col, ylabel) in zip(axs[len(RAW_QUANTITIES):], CONSERVED_QUANTITIES):
         for label, data in datasets:
@@ -89,7 +116,7 @@ def plot_diags(diags_filenames, output=None):
         ax.set_ylabel(ylabel)
         ax.grid(True, which="both")
         if len(datasets) > 1:
-            ax.legend(fontsize=8)
+            ax.legend()
 
     axs[-1].set_xlabel("Time")
     fig.tight_layout()
@@ -124,13 +151,13 @@ def _slice_2d(array_4d, plane="xvx", index=None):
     nx, ny, nvx, nvy = array_4d.shape
     if plane == "xvx":
         iy, ivy = index if index is not None else (ny // 2, nvy // 2)
-        return array_4d[:, iy, :, ivy], ("x", "vx")
+        return array_4d[:, iy, :, ivy], (r"$x$", r"$v_x$")
     elif plane == "xy":
         ivx, ivy = index if index is not None else (nvx // 2, nvy // 2)
-        return array_4d[:, :, ivx, ivy], ("x", "y")
+        return array_4d[:, :, ivx, ivy], (r"$x$", r"$y$")
     elif plane == "vxvy":
         ix, iy = index if index is not None else (nx // 2, ny // 2)
-        return array_4d[ix, iy, :, :], ("vx", "vy")
+        return array_4d[ix, iy, :, :], (r"$v_x$", r"$v_y$")
     else:
         raise ValueError(f"Unknown plane {plane!r}, expected 'xvx', 'xy', or 'vxvy'")
 
@@ -151,9 +178,21 @@ def evaluate_rank(data_dir, it, rank, species=0):
     plt.pcolormesh(target[:,16,:, 16])
     plt.savefig("target.png")
     plt.show()
-    
 
     return payload, target, recon
+
+
+_AXIS_ENDPOINT = (False, False, True, True)  # x, y periodic (half-open); vx, vy inclusive
+
+
+def _axis_coords(shape, bounds):
+    """Physical coordinate arrays (x, y, vx, vy) for one rank's own local grid,
+    using the same half-open/inclusive convention as the assembled global grid.
+    """
+    return tuple(
+        np.linspace(bounds[2 * axis], bounds[2 * axis + 1], shape[axis], endpoint=_AXIS_ENDPOINT[axis])
+        for axis in range(4)
+    )
 
 
 def _assemble_global_grid(local_shapes, local_bounds_list):
@@ -165,7 +204,6 @@ def _assemble_global_grid(local_shapes, local_bounds_list):
     Returns ((x_coords, y_coords, vx_coords, vy_coords), offsets), where offsets[i]
     is a 4-tuple of starting indices for rank i's chunk in the assembled global array.
     """
-    endpoint_per_axis = (False, False, True, True)  # x, y periodic; vx, vy inclusive
     coords_per_axis = []
     starts_per_axis = []  # one {interval_key: start_index} dict per axis
 
@@ -181,7 +219,7 @@ def _assemble_global_grid(local_shapes, local_bounds_list):
         for key in sorted(intervals):
             lo, hi = key
             n = intervals[key]
-            chunks.append(np.linspace(lo, hi, n, endpoint=endpoint_per_axis[axis]))
+            chunks.append(np.linspace(lo, hi, n, endpoint=_AXIS_ENDPOINT[axis]))
             starts[key] = offset
             offset += n
 
@@ -201,9 +239,8 @@ def _assemble_global_grid(local_shapes, local_bounds_list):
 
 def evaluate_global_domain(data_dir, it, species=0):
     """Assemble the FULL global domain from every rank's saved network at this
-    iteration: the exact per-rank ground-truth chunks tiled together, and the
-    partition-of-unity reconstruction (`assemble_global_field`) evaluated on
-    that same full grid.
+    iteration. Returns (global_coords, target, recon, rank_regions): global_coords
+    is (x_c, y_c, vx_c, vy_c); rank_regions maps rank -> (local_shape, local_bounds).
     """
     paths = _find_rank_files(data_dir, it)
     payloads = [load_online_params(p) for p in paths]
@@ -235,75 +272,138 @@ def evaluate_global_domain(data_dir, it, species=0):
     recon = np.asarray(global_out[species]).reshape(nx, ny, nvx, nvy)
 
     rank_regions = {
-        payload["rank"]: (offset, payload["local_shape"]) for payload, offset in zip(payloads, offsets)
+        payload["rank"]: (payload["local_shape"], payload["local_bounds"]) for payload in payloads
     }
 
-    return global_target[species], recon, rank_regions
+    return (x_c, y_c, vx_c, vy_c), global_target[species], recon, rank_regions
 
 
 _PLANE_AXES = {"xvx": (0, 2), "xy": (0, 1), "vxvy": (2, 3)}  # (x, y, vx, vy) -> plane axis indices
+_PLANE_FIXED_AXES = {"xvx": (1, 3), "xy": (2, 3), "vxvy": (0, 1)}  # axes held fixed, _slice_2d's index order
 _RANK_COLORS = [f"C{i}" for i in range(10)]  # matplotlib's default color cycle
+_RANK_LINESTYLES = ["-", "--", ":", "-."]
 
 
 def _color_for_index(i):
     return _RANK_COLORS[i % len(_RANK_COLORS)]
 
 
-def _rank_box_in_plane(offset, shape, plane):
-    """Pixel-index (x0, y0, width, height) box for one rank's region within a
-    2D slice plane of the full global array, for drawing e.g. a Rectangle patch.
+def _linestyle_for_index(i):
+    return _RANK_LINESTYLES[i % len(_RANK_LINESTYLES)]
+
+
+def _local_slice_index(local_shape, local_bounds, plane, global_coords):
+    """Index into this rank's own local grid, along the plane's fixed axes,
+    nearest the physical point the global slice uses for those axes -- so a
+    rank's local row shows the same physical cut as the global row instead of
+    an index centered on its own (possibly disjoint) subdomain.
+    """
+    fixed_axes = _PLANE_FIXED_AXES[plane]
+    local_axis_coords = _axis_coords(local_shape, local_bounds)
+    return tuple(
+        int(np.argmin(np.abs(local_axis_coords[axis] - global_coords[axis][len(global_coords[axis]) // 2])))
+        for axis in fixed_axes
+    )
+
+
+def _plane_extent(bounds, plane):
+    """Physical (xmin, xmax, ymin, ymax) for the plane's shown axes, from an
+    8-tuple of (x,y,vx,vy) bounds -- used both as imshow's extent and, for the
+    global row, as the box marking where a rank's subdomain sits.
     """
     a0, a1 = _PLANE_AXES[plane]
-    return offset[a0] - 0.5, offset[a1] - 0.5, shape[a0], shape[a1]
+    return bounds[2 * a0], bounds[2 * a0 + 1], bounds[2 * a1], bounds[2 * a1 + 1]
 
 
-def _plot_row(fig, axs_row, target_2d, recon_2d, axes_labels, title_prefix, column_ranges, boxes=None, frame_color=None):
+def _global_bounds_from_coords(global_coords):
+    """(x,y,vx,vy) bounds 8-tuple spanning the full assembled grid, in the
+    same layout as a rank's own local_bounds, for reuse with `_plane_extent`.
+    """
+    return tuple(v for c in global_coords for v in (float(c.min()), float(c.max())))
+
+
+def _rank_box_in_plane(shape, bounds, plane):
+    """Physical (x0, y0, width, height) box for one rank's region within a
+    2D slice plane of the full global domain, for drawing e.g. a Rectangle patch.
+
+    Periodic axes (x, y) are sampled half-open (`endpoint=False`): the last
+    grid point -- and thus the global plot's extent, built from actual grid
+    values -- falls one cell short of the nominal upper bound. Pull the box's
+    upper edge in by one cell on those axes so it lines up with the plot
+    instead of poking out past it.
+    """
+    a0, a1 = _PLANE_AXES[plane]
+    x0, x1, y0, y1 = _plane_extent(bounds, plane)
+    if not _AXIS_ENDPOINT[a0]:
+        x1 -= (x1 - x0) / shape[a0]
+    if not _AXIS_ENDPOINT[a1]:
+        y1 -= (y1 - y0) / shape[a1]
+    return x0, y0, x1 - x0, y1 - y0
+
+
+def _plot_row(
+    fig, axs_row, target_2d, recon_2d, axes_labels, title_prefix, column_ranges,
+    extent=None, boxes=None, add_rank_labels=False, frame_color=None, frame_linestyle="-",
+):
     diff_2d = recon_2d - target_2d
     for ax, data, label in zip(axs_row, [target_2d, recon_2d, diff_2d], ["target", "reconstruction", "error"]):
         vmin, vmax = column_ranges[label]
-        im = ax.imshow(np.asarray(data).T, origin="lower", aspect="auto", vmin=vmin, vmax=vmax)
+        im = ax.imshow(np.asarray(data).T, origin="lower", aspect="auto", extent=extent, vmin=vmin, vmax=vmax)
         ax.set_title(f"{title_prefix}: {label}")
         ax.set_xlabel(axes_labels[0])
         ax.set_ylabel(axes_labels[1])
         fig.colorbar(im, ax=ax, fraction=0.046)
-        for box, color in boxes or []:
+        for rank, box, color, linestyle in boxes or []:
             x0, y0, w, h = box
-            ax.add_patch(Rectangle((x0, y0), w, h, edgecolor=color, facecolor="none", linewidth=2))
+            ax.add_patch(Rectangle(
+                (x0, y0), w, h, edgecolor=color, facecolor="none", linestyle=linestyle, clip_on=False,
+            ))
+            if add_rank_labels:
+                ax.text(
+                    x0 + w / 2, y0 + h / 2, f"rank {rank}", fontsize=RANK_LABEL_FONTSIZE,
+                    color=color, ha="center", va="center", fontweight="bold", clip_on=False,
+                )
         if frame_color is not None:
             for spine in ax.spines.values():
                 spine.set_edgecolor(frame_color)
-                spine.set_linewidth(2)
+                spine.set_linestyle(frame_linestyle)
+                spine.set_linewidth(BOX_LINEWIDTH)
 
 
-def plot_combined(local_entries, global_target, global_recon, it, plane="xvx", output=None):
-    """One figure: top row is the full-domain reconstruction assembled from every
-    rank's network vs. the full-domain data, with one colored frame per requested
-    rank marking where its subdomain sits within the full domain; each following
-    row is one rank's own network vs. its local training data, framed in the same
-    color as its box in the top row.
+def plot_combined(
+    local_entries, global_target, global_recon, it, plane="xvx", output=None, global_extent=None,
+    add_rank_labels=False,
+):
+    """Top row: full-domain reconstruction vs. data, with one colored/dashed
+    box per rank. Each following row: one rank's own network vs. its local
+    data, sliced at the same physical point as the global row, framed to
+    match its box. Axes show physical coordinates, not grid indices.
 
-    local_entries: list of (rank, target, recon, box, color) tuples, one per
-    requested rank, in the order their rows should appear.
+    local_entries: list of (rank, target, recon, box, color, linestyle,
+    index, extent) tuples, one per requested rank.
 
-    Each of the 3 columns (target, reconstruction, error) gets its own colorbar
-    range, shared across every row so the global assembly and each rank's local
-    network are directly comparable within that column -- but target,
-    reconstruction, and error are not forced onto the same range as each other.
+    Each of the 3 columns (target, reconstruction, error) gets its own shared
+    colorbar range across rows.
     """
     global_t2d, axes_labels = _slice_2d(global_target, plane=plane)
     global_r2d, _ = _slice_2d(global_recon, plane=plane)
 
     local_slices = [
-        (rank, *_slice_2d(target, plane=plane)[:1], _slice_2d(recon, plane=plane)[0], box, color)
-        for rank, target, recon, box, color in local_entries
+        (
+            rank,
+            _slice_2d(target, plane=plane, index=index)[0],
+            _slice_2d(recon, plane=plane, index=index)[0],
+            box, color, linestyle, extent,
+        )
+        for rank, target, recon, box, color, linestyle, index, extent in local_entries
     ]
 
     def _range(arrays):
         return (min(float(np.min(a)) for a in arrays), max(float(np.max(a)) for a in arrays))
 
-    all_targets = [global_t2d] + [t2d for _, t2d, _, _, _ in local_slices]
-    all_recons = [global_r2d] + [r2d for _, _, r2d, _, _ in local_slices]
-    all_diffs = [global_r2d - global_t2d] + [r2d - t2d for _, t2d, r2d, _, _ in local_slices]
+    all_targets = [global_t2d] + [t2d for _, t2d, _, _, _, _, _ in local_slices]
+    all_recons = [global_r2d] + [r2d for _, _, r2d, _, _, _, _ in local_slices]
+    all_diffs = [global_r2d - global_t2d] + [r2d - t2d for _, t2d, r2d, _, _, _, _ in local_slices]
     column_ranges = {
         "target": _range(all_targets),
         "reconstruction": _range(all_recons),
@@ -311,19 +411,21 @@ def plot_combined(local_entries, global_target, global_recon, it, plane="xvx", o
     }
 
     n_rows = 1 + len(local_slices)
-    fig, axs = plt.subplots(n_rows, 3, figsize=(15, 4 * n_rows))
+    fig, axs = plt.subplots(n_rows, 3, figsize=(3 * COMBINED_COL_WIDTH, COMBINED_ROW_HEIGHT * n_rows))
     axs = np.atleast_2d(axs)
 
-    boxes = [(box, color) for _, _, _, box, color in local_entries if box is not None]
+    boxes = [
+        (rank, box, color, linestyle) for rank, _, _, box, color, linestyle, _, _ in local_entries if box is not None
+    ]
     _plot_row(
-        fig, axs[0], global_t2d, global_r2d, axes_labels, f"global (iter={it}, all ranks)",
-        column_ranges, boxes=boxes,
+        fig, axs[0], global_t2d, global_r2d, axes_labels, f"global (iter={it})",
+        column_ranges, extent=global_extent, boxes=boxes, add_rank_labels=add_rank_labels,
     )
 
-    for row, (rank, t2d, r2d, _, color) in enumerate(local_slices, start=1):
+    for row, (rank, t2d, r2d, _, color, linestyle, extent) in enumerate(local_slices, start=1):
         _plot_row(
-            fig, axs[row], t2d, r2d, axes_labels, f"local (iter={it}, rank={rank})",
-            column_ranges, frame_color=color,
+            fig, axs[row], t2d, r2d, axes_labels, f"local (rank={rank})",
+            column_ranges, extent=extent, frame_color=color, frame_linestyle=linestyle,
         )
 
     fig.tight_layout()
@@ -341,14 +443,15 @@ def _online_networks_output_path(data_dir, it, ranks, species, plane):
     return os.path.join(data_dir, f"eval_iter{it:05d}_rank{rank_label}_species{species}_{plane}.png")
 
 
-def run_online_networks(data_dir, it, ranks=None, species=0, plane="xvx"):
+def run_online_networks(data_dir, it, ranks=None, species=0, plane="xvx", add_rank_labels=False):
     """Evaluate/plot saved online INR networks (params_iterXXXXX_rankXXX.npz):
     top row is the full-domain reconstruction assembled from every rank's network
     at that iteration vs. the full-domain data; each following row is one
     requested rank's own network vs. the local data it was trained on,
     color-matched to its box in the top row. `ranks=None` uses every rank found.
     """
-    global_target, global_recon, rank_regions = evaluate_global_domain(data_dir, it, species=species)
+    global_coords, global_target, global_recon, rank_regions = evaluate_global_domain(data_dir, it, species=species)
+    global_extent = _plane_extent(_global_bounds_from_coords(global_coords), plane)
 
     ranks = ranks if ranks is not None else sorted(rank_regions)
 
@@ -357,11 +460,21 @@ def run_online_networks(data_dir, it, ranks=None, species=0, plane="xvx"):
         _, target, recon = evaluate_rank(data_dir, it, rank, species=species)
 
         color = _color_for_index(i)
-        box = _rank_box_in_plane(*rank_regions[rank], plane) if rank in rank_regions else None
-        local_entries.append((rank, target, recon, box, color))
+        linestyle = _linestyle_for_index(i)
+        if rank in rank_regions:
+            shape, bounds = rank_regions[rank]
+            box = _rank_box_in_plane(shape, bounds, plane)
+            index = _local_slice_index(shape, bounds, plane, global_coords)
+            extent = _plane_extent(bounds, plane)
+        else:
+            box, index, extent = None, None, global_extent
+        local_entries.append((rank, target, recon, box, color, linestyle, index, extent))
 
     out = _online_networks_output_path(data_dir, it, ranks, species, plane)
-    plot_combined(local_entries, global_target, global_recon, it=it, plane=plane, output=out)
+    plot_combined(
+        local_entries, global_target, global_recon, it=it, plane=plane, output=out,
+        global_extent=global_extent, add_rank_labels=add_rank_labels,
+    )
 
 
 # Offline fine-tuning (continue saved online networks without rerunning the simulation)
@@ -432,6 +545,9 @@ def parse_args():
     online_parser.add_argument(
         "--plane", choices=["xvx", "xy", "vxvy"], default="xvx", help="2D slice plane to plot (default: xvx).",
     )
+    online_parser.add_argument(
+        "--add-rank-labels", action="store_true", help="Label each rank's box with \"rank X\" at its center.",
+    )
 
     finetune_parser = subparsers.add_parser(
         "finetune-offline",
@@ -495,6 +611,7 @@ def main():
     elif args.command == "online-networks":
         run_online_networks(
             args.data_dir, args.iter, ranks=args.rank, species=args.species, plane=args.plane,
+            add_rank_labels=args.add_rank_labels,
         )
     elif args.command == "finetune-offline":
         out_dir = args.data_dir if args.overwrite else args.out_dir

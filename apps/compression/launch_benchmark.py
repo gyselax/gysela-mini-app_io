@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from datetime import datetime
@@ -30,17 +31,19 @@ SCHEFILE = os.path.join(BASE_DIR, "scheduler.json")
 
 # ------------------------------------------------------------------
 # Toolchain resolution: a single --arch flag picks
-# toolchains/<site>/<arch>/environment.sh, where <site> is 'adastra' if
-# sbatch is available (login or compute node) and 'persee' otherwise.
+# toolchains/<site>/<arch>/environment.sh, where <site> is chosen using
+# resolve_site.
 # On Adastra, --arch also becomes 'srun/#SBATCH --constraint='.
 # ------------------------------------------------------------------
 ENV_SCRIPT = None  # resolved from --arch
 VENV_ACTIVATE = None  # resolved from --venv
 
-# 3 distinct nodes on Adastra: one each for the Dask scheduler, the Dask
-# worker(s), and the simulation
+# 3 distinct nodes on Adastra: one for the Dask scheduler, the Dask
+# worker(s), and the simulation.
 ADASTRA_NODES = 3
-ADASTRA_N_PROCS = 4  # simulation MPI ranks
+ADASTRA_N_PROCS = 4  # simulation MPI ranks -- unrelated to the Dask worker count below
+
+SIM_OMP_NUM_THREADS = 1
 
 # Dask worker processes on its dedicated node: 1 per CPU socket
 WORKER_RANKS_PER_NODE_BY_ARCH = {"genoa": 2, "mi250": 1}
@@ -48,8 +51,24 @@ DEFAULT_WORKER_RANKS_PER_NODE = 2
 
 
 def resolve_site():
-    """Which toolchains/<site>/ subtree we're on: 'adastra' if sbatch is available, else 'persee'."""
-    return "adastra" if shutil.which("sbatch") is not None else "persee"
+    """Which toolchains/<site>/ subtree we're on.
+    Confirm via Slurm's ClusterName (`scontrol show config`).
+    """
+    scontrol = shutil.which("scontrol")
+    if scontrol:
+        try:
+            result = subprocess.run(
+                [scontrol, "show", "config"], capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0 and "adastra" in result.stdout.lower():
+                return "adastra"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    if "adastra" in socket.gethostname().lower():
+        return "adastra"
+
+    return "persee"
 
 
 def configure_toolchain(args):
@@ -424,7 +443,10 @@ def sim_launch_prefix():
         prefix = ["srun"]
         if sim_node:
             prefix += ["-w", sim_node]
-        prefix += ["-N", "1", "--ntasks-per-node", str(ADASTRA_N_PROCS), "--overlap"]
+        prefix += [
+            "-N", "1", "--ntasks-per-node", str(ADASTRA_N_PROCS),
+            "--cpus-per-task", str(SIM_OMP_NUM_THREADS), "--overlap",
+        ]
         return prefix
     return ["mpirun", "-n", "4"]
 
@@ -451,6 +473,11 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
         abs_pdi = os.path.abspath(pdi_yaml)
         sim_cmd = sim_launch_prefix() + [exec_path, abs_gysela, abs_pdi]
 
+        sim_env = dict(deisa_env)
+        sim_env["OMP_NUM_THREADS"] = str(SIM_OMP_NUM_THREADS)
+        sim_env["OMP_PROC_BIND"] = "spread"
+        sim_env["OMP_PLACES"] = "threads"
+
         analytics_proc = subprocess.Popen(
             ["python3", ANALYTICS_SCRIPT],
             cwd=work_dir,
@@ -460,7 +487,7 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
         sim_proc = subprocess.Popen(
             sim_cmd,
             cwd=work_dir,
-            env=deisa_env,
+            env=sim_env,
         )
 
         analytics_rc = analytics_proc.wait()
@@ -694,7 +721,11 @@ def submit_batch_and_wait(args):
         f.write("\n".join(sbatch_lines) + "\n")
 
     print(f"[Batch] Submitting {script_path}")
-    result = subprocess.run(["sbatch", script_path], capture_output=True, text=True, check=True)
+    result = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"sbatch failed (exit {result.returncode}):\n{result.stderr.strip() or result.stdout.strip()}"
+        )
     print(f"  {result.stdout.strip()}")
     job_id = result.stdout.strip().split()[-1]
 

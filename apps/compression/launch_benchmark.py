@@ -43,7 +43,10 @@ VENV_ACTIVATE = None  # resolved from --venv
 ADASTRA_NODES = 3
 ADASTRA_N_PROCS = 4  # simulation MPI ranks -- unrelated to the Dask worker count below
 
-SIM_OMP_NUM_THREADS = 1
+GENOA_LOGICAL_THREADS_PER_NODE = 384
+DEFAULT_SIM_OMP_NUM_THREADS = 1
+
+SIM_OMP_THREADS = None  # resolved from --arch, see configure_toolchain()
 
 # Dask worker processes on its dedicated node: 1 per CPU socket
 WORKER_RANKS_PER_NODE_BY_ARCH = {"genoa": 2, "mi250": 1}
@@ -72,11 +75,20 @@ def resolve_site():
 
 
 def configure_toolchain(args):
-    """Resolve the toolchains/<site>/<arch>/environment.sh and venv activate paths from --arch/--venv."""
-    global ENV_SCRIPT, VENV_ACTIVATE
+    """Resolve the toolchains/<site>/<arch>/environment.sh, venv activate path,
+    and the simulation's OMP_NUM_THREADS, from --arch/--venv."""
+    global ENV_SCRIPT, VENV_ACTIVATE, SIM_OMP_THREADS
     ENV_SCRIPT = os.path.join(BASE_DIR, "toolchains", resolve_site(), args.arch.lower(), "environment.sh")
     venv_dir = os.path.abspath(args.venv) if args.venv else os.path.join(BASE_DIR, ".gys_env")
     VENV_ACTIVATE = os.path.join(venv_dir, "bin", "activate")
+
+    arch_lower = args.arch.lower()
+    if arch_lower == "genoa":
+        SIM_OMP_THREADS = max(1, GENOA_LOGICAL_THREADS_PER_NODE // ADASTRA_N_PROCS)
+    elif arch_lower == "mi250":
+        SIM_OMP_THREADS = 1
+    else:
+        SIM_OMP_THREADS = DEFAULT_SIM_OMP_NUM_THREADS
 
 
 def on_adastra():
@@ -445,8 +457,11 @@ def sim_launch_prefix():
             prefix += ["-w", sim_node]
         prefix += [
             "-N", "1", "--ntasks-per-node", str(ADASTRA_N_PROCS),
-            "--cpus-per-task", str(SIM_OMP_NUM_THREADS), "--overlap",
+            "--cpus-per-task", str(SIM_OMP_THREADS),
         ]
+        if SIM_OMP_THREADS > 1:
+            prefix += ["--threads-per-core", "2"]
+        prefix += ["--overlap"]
         return prefix
     return ["mpirun", "-n", "4"]
 
@@ -473,10 +488,12 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
         abs_pdi = os.path.abspath(pdi_yaml)
         sim_cmd = sim_launch_prefix() + [exec_path, abs_gysela, abs_pdi]
 
-        sim_env = dict(deisa_env)
-        sim_env["OMP_NUM_THREADS"] = str(SIM_OMP_NUM_THREADS)
-        sim_env["OMP_PROC_BIND"] = "spread"
-        sim_env["OMP_PLACES"] = "threads"
+        sim_env = deisa_env
+        if "SLURM_JOB_ID" in os.environ:
+            sim_env = dict(deisa_env)
+            sim_env["OMP_NUM_THREADS"] = str(SIM_OMP_THREADS)
+            sim_env["OMP_PROC_BIND"] = "CLOSE"
+            sim_env["OMP_PLACES"] = "THREADS"
 
         analytics_proc = subprocess.Popen(
             ["python3", ANALYTICS_SCRIPT],

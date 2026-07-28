@@ -35,10 +35,10 @@ ONLINE_COMPRESSOR_CLASS = OnlineNeuralNetworkCompressor
 ONLINE_COMPRESSOR_PARAMS = {
     "arch": "periodic_siren_small_32",
     "lr": 1e-3,
-    "warm_iters_adam": 3,
-    "warm_iters_lbfgs": 3,
-    "refine_iters_adam": 2,
-    "refine_iters_lbfgs": 2,
+    "warm_iters_adam": 3000,
+    "warm_iters_lbfgs": 100,
+    "refine_iters_adam": 300,
+    "refine_iters_lbfgs": 10,
     "verbose": True,
     "debug_plot": True,
 }

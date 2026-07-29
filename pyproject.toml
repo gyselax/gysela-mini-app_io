@@ -26,7 +26,7 @@ dependencies = [
     "optax>=0.2.8",
     "jax>=0.4.28",
     "equinox>=0.1.3",
-    "scimba @ git+https://gitlab.com/scimba/scimba.git",
+    "scimba",
 ]
 
 [project.optional-dependencies]

@@ -139,6 +139,7 @@ def electric_field_from_potential(phi, grid):
 def electric_field_energy(Efield, grid):
     return 0.5 * da.sum(to_dask(Efield) ** 2) * grid.dV_2D
 
+_INITIALIZED_DIAG_FILES = set()
 
 def measure(cfg, f, Efield, it, t_actual):
     """Compute and append conserved-variable diagnostics for a 4D f[x, y, vx, vy]."""
@@ -178,7 +179,8 @@ def measure(cfg, f, Efield, it, t_actual):
         "momentum_y": momentum_y,
     }
 
-    reset = it == 0
+    reset = diag_file_path not in _INITIALIZED_DIAG_FILES
+    _INITIALIZED_DIAG_FILES.add(diag_file_path)
     write_header = reset or not diag_file_path.is_file()
     with open(diag_file_path, mode="w" if reset else "a", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=data.keys())
@@ -216,8 +218,11 @@ def compute_diagnostics(fdistribu_chunks):
         )
 
     fdistribu = np.array(fdistribu_chunks[0])  # (Nsp, Nx, Ny, Nvx, Nvy)
-    t_actual  = float(np.array(coords['absolute_time'])[0])
+    # This caused a race condition conflict on persee (sim runs faster then the diagnostics
+    # and republishes t_actual before the one attached to the fdistribu chunk could be used)
+    # t_actual  = float(np.array(coords['absolute_time'])[0])
     timestep  = int(fdistribu_chunks[0].t)
+    t_actual = timestep * float(coords['deltat'])
 
     cfg = get_measure_config()
 
@@ -233,3 +238,19 @@ def compute_diagnostics(fdistribu_chunks):
 
 
 deisa.execute_callbacks()
+
+def _sort_diagnostics_files():
+    """Rewrite each diagnostics.csv sorted by iter (rows are appended in
+    task-completion order, which is not guaranteed to be time order)."""
+    for path in _INITIALIZED_DIAG_FILES:
+        with open(path, newline="") as fh:
+            reader = csv.DictReader(fh)
+            fieldnames = reader.fieldnames
+            rows = sorted(reader, key=lambda r: int(r["iter"]))
+        with open(path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+
+_sort_diagnostics_files()

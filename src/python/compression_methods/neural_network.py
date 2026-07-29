@@ -1,33 +1,8 @@
 import json
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
-
-
-def _default_jax_platforms() -> str:
-    """Pick a JAX backend that works on this machine.
-
-    jaxlib's CUDA 13 plugin ships a ptxas that cannot target sm_70 (V100).
-    Fall back to CPU unless the user sets JAX_PLATFORMS explicitly.
-    """
-    try:
-        out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-        caps = [float(line.strip()) for line in out.splitlines() if line.strip()]
-        if caps and max(caps) >= 8.0:
-            return "cuda"
-    except Exception:
-        pass
-    return "cpu"
-
-
-if "JAX_PLATFORMS" not in os.environ:
-    os.environ["JAX_PLATFORMS"] = _default_jax_platforms()
 
 import equinox as eqx
 import jax
@@ -398,7 +373,10 @@ class NeuralNetworkCompressor(Compressor):
         
         self.models = []
         self.loss_histories = []
-        
+
+        if self.verbose:
+            print(f"[INR/{self.arch}] device: {jax.devices()}", flush=True)
+
         for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
             key, subkey = jax.random.split(key)
@@ -409,7 +387,8 @@ class NeuralNetworkCompressor(Compressor):
             if self.verbose:
                 print(
                     f"[INR/{self.arch}] species {isp}: best loss "
-                    f"{float(jnp.min(loss_hist)):.2e} ({t1 - t0:.2f}s)"
+                    f"{float(jnp.min(loss_hist)):.2e} ({t1 - t0:.2f}s)",
+                    flush=True,
                 )
             
             self.models.append(model)
@@ -649,6 +628,7 @@ class OnlineNeuralNetworkCompressor:
 
         if self.verbose:
             tag = "cold" if cold_start else "warm"
+            print(f"[OnlineINR/{self.arch}] rank {rank}: device {jax.default_backend()}", flush=True)
             print(
                 f"[OnlineINR/{self.arch}] rank {rank}: {tag} fit "
                 f"(ADAM {n_iters_adam} + L-BFGS {n_iters_lbfgs} iters) "

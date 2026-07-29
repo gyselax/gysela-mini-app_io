@@ -1,6 +1,7 @@
 """In-situ diagnostics: conserved-variable calculations and deisa analytics callback."""
 
 import csv
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from distributed import get_client
 import compression_diagnostics
 
 _MEASURE_CFG = None
+
+# Wall-clock reference point for this process, taken as soon as diagnostics.py
+# starts (i.e. essentially when the simulation launches). Elapsed time from
+# here covers simulation, compression, and diagnostics running concurrently.
+_START_TIME = time.monotonic()
 
 
 @dataclass
@@ -168,6 +174,7 @@ def measure(cfg, f, Efield, it, t_actual):
     data = {
         "iter":       it,
         "time":       float(t_actual),
+        "cpu_time":   time.monotonic() - _START_TIME,
         "ekin":       ekin,
         "epot":       epot,
         "etot":       ekin + epot,

@@ -41,7 +41,8 @@ VENV_ACTIVATE = None  # resolved from --venv
 # 3 distinct nodes on Adastra: one for the Dask scheduler, the Dask
 # worker(s), and the simulation.
 ADASTRA_NODES = 3
-ADASTRA_N_PROCS = 4  # simulation MPI ranks -- unrelated to the Dask worker count below
+DEFAULT_N_PROCS = 4
+ADASTRA_N_PROCS = None  # simulation MPI ranks -- resolved from --nprocs, see configure_toolchain()
 
 GENOA_LOGICAL_THREADS_PER_NODE = 384
 DEFAULT_SIM_OMP_NUM_THREADS = 1
@@ -76,11 +77,13 @@ def resolve_site():
 
 def configure_toolchain(args):
     """Resolve the toolchains/<site>/<arch>/environment.sh, venv activate path,
-    and the simulation's OMP_NUM_THREADS, from --arch/--venv."""
-    global ENV_SCRIPT, VENV_ACTIVATE, SIM_OMP_THREADS
+    the simulation's MPI rank count, and its OMP_NUM_THREADS, from --arch/--venv/--nprocs."""
+    global ENV_SCRIPT, VENV_ACTIVATE, SIM_OMP_THREADS, ADASTRA_N_PROCS
     ENV_SCRIPT = os.path.join(BASE_DIR, "toolchains", resolve_site(), args.arch.lower(), "environment.sh")
     venv_dir = os.path.abspath(args.venv) if args.venv else os.path.join(BASE_DIR, ".gys_env")
     VENV_ACTIVATE = os.path.join(venv_dir, "bin", "activate")
+
+    ADASTRA_N_PROCS = args.nprocs
 
     arch_lower = args.arch.lower()
     if arch_lower == "genoa":
@@ -166,6 +169,17 @@ def parse_args():
             "rank per CPU socket for --arch "
             f"({WORKER_RANKS_PER_NODE_BY_ARCH}, or {DEFAULT_WORKER_RANKS_PER_NODE} "
             "for an unlisted --arch); on persee, defaults to 1."
+        ),
+    )
+
+    parser.add_argument(
+        "--nprocs",
+        type=int,
+        default=DEFAULT_N_PROCS,
+        help=(
+            "Number of MPI ranks to launch the simulation with "
+            f"(default: {DEFAULT_N_PROCS}). On Adastra (GENOA), also sets "
+            "OMP_NUM_THREADS per rank to threads_per_node/nprocs."
         ),
     )
 
@@ -463,7 +477,7 @@ def sim_launch_prefix():
             prefix += ["--threads-per-core", "2"]
         prefix += ["--overlap"]
         return prefix
-    return ["mpirun", "-n", "4"]
+    return ["mpirun", "-n", str(ADASTRA_N_PROCS)]
 
 
 def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_workers=1, extra_env=None):
@@ -713,6 +727,7 @@ def submit_batch_and_wait(args):
         forwarded.append("--online")
     if args.dask_workers is not None:
         forwarded += ["--dask-workers", str(args.dask_workers)]
+    forwarded += ["--nprocs", str(args.nprocs)]
     forwarded += ["--arch", args.arch]
     if args.venv:
         forwarded += ["--venv", args.venv]

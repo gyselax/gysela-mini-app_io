@@ -7,16 +7,16 @@ Input:
 SplineMesh:
   x_min: 0.0
   x_max: 31.41592653589793
-  x_ncells: 128
+  x_ncells: 32
   y_min: 0.0
   y_max: 31.41592653589793
-  y_ncells : 128
+  y_ncells : 32
   vx_min: -15.707963267948966
   vx_max: +15.707963267948966
-  vx_ncells: 129
+  vx_ncells: 33
   vy_min: -15.707963267948966
   vy_max: +15.707963267948966
-  vy_ncells: 129
+  vy_ncells: 33
 
 SpeciesInfo:
 - charge: -1.
@@ -29,7 +29,7 @@ SpeciesInfo:
 
 Algorithm:
   deltat: 0.1
-  nbiter: 400
+  nbiter: 40
 
 compression:
   compression_period: 10

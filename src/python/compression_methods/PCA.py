@@ -40,6 +40,7 @@ class PCACompressor(Compressor):
         self.alpha = float(alpha)
         self.clip_nonnegative = bool(clip_nonnegative)
         self.random_state = random_state
+        self._full_singular_values = None
 
         super().__init__(
             method_name="PCA",
@@ -176,7 +177,12 @@ class PCACompressor(Compressor):
             random_state=self.random_state,
         )
 
-        return self.model.fit_transform(X_proc)
+        coeffs = self.model.fit_transform(X_proc)
+        
+        #full svd spectrum 
+        self._full_singular_values = np.linalg.svd(X_proc, full_matrices=False, compute_uv=False) 
+        
+        return coeffs
 
     def decompress_array(self, coefficients):
         if self.model is None:
@@ -402,9 +408,9 @@ class PCACompressor(Compressor):
         )
 
     def save_svd_spectrum(self, spectrum_dir, timestep):
-        if self.model is None:
-            raise RuntimeError("No fitted PCA model available.")
-        s = self.model.singular_values_ 
+        if self._full_singular_values is None:
+           raise RuntimeError("No fitted PCA model available.")
+        s = self._full_singular_values 
         s_norm = s / s[0]
         spectrum_dir = Path(spectrum_dir)
         spectrum_dir.mkdir(parents=True, exist_ok=True)
@@ -412,5 +418,5 @@ class PCACompressor(Compressor):
         with open(path, "w") as f:
             f.write("index,sigma_norm\n")
             for idx, val in enumerate(s_norm):
-                f.write(f"{idx},{float(val):.12e}\n")
-        return path
+                f.write(f"{idx},{float(val):12e}\n")
+        return path 

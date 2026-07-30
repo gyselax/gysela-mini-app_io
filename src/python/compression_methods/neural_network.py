@@ -182,9 +182,12 @@ class NeuralNetworkCompressor(Compressor):
         max_iters: int = 2000,
         batch_size: int = 2000,
         lbfgs_iters: int = 50,
+        warm_max_iters: int = 300,
+        warm_lbfgs_iters: int = 30,
         threshold: float = 1e-8,
         seed: int = 42,
         warm_start_payload: Optional[str] = None,
+        clear_cache_every: int = 5, # Clears XLA-compiled cache (forces recompilation but no llvm OOM)
         verbose: bool = True,
     ):
         if arch not in AVAILABLE_INR_ARCHS:
@@ -200,9 +203,18 @@ class NeuralNetworkCompressor(Compressor):
         self.max_iters = int(max_iters)
         self.batch_size = int(batch_size)
         self.lbfgs_iters = int(lbfgs_iters)
+        # Iteration budgets for the warm starts with the model in memory
+        self.warm_max_iters = int(warm_max_iters)
+        self.warm_lbfgs_iters = int(warm_lbfgs_iters)
         self.threshold = float(threshold)
         self.seed = int(seed)
         self.warm_start_payload = warm_start_payload
+        # Periodic safety net: some compiled code gets leaked accross the trainings
+        # Clearing JAX's cache every N calls bounds the leak's growth
+        # This doesn't solve the problem, it works around it
+        # Setting 0 disables this behavior
+        self.clear_cache_every = int(clear_cache_every)
+        self._n_compress_calls = 0
         self.verbose = bool(verbose)
         
         super().__init__(
@@ -212,11 +224,19 @@ class NeuralNetworkCompressor(Compressor):
             max_iters=self.max_iters,
             batch_size=self.batch_size,
             lbfgs_iters=self.lbfgs_iters,
+            warm_max_iters=self.warm_max_iters,
+            warm_lbfgs_iters=self.warm_lbfgs_iters,
         )
         
         self.original_shape = None
         self.models: list[eqx.Module] = []
         self.loss_histories: list[jnp.ndarray] = []
+        # Persistent, cross-timestep state.
+        # Keeping the SAME optimizer wrapper object alive, instead of building a
+        # fresh ScimbaAdam / ScimbaLBfgs on every call, is what avoids re-triggering
+        # a JAX recompilation at every timestep.
+        self._adam_opts: dict[int, Any] = {}
+        self._lbfgs_opts: dict[int, Any] = {}
         
     # Grid reconstruction
     
@@ -274,7 +294,8 @@ class NeuralNetworkCompressor(Compressor):
         
     # Training (one species at a time)
     
-    def _fit_on_species(self, inputs: jnp.ndarray, targets: jnp.ndarray, key: jax.Array, warm_model):
+    def _fit_on_species(self, species_idx: int, inputs: jnp.ndarray, targets: jnp.ndarray, key: jax.Array, warm_model):
+        is_warm = warm_model is not None
         if warm_model is not None:
             model = warm_model
         else:
@@ -283,10 +304,16 @@ class NeuralNetworkCompressor(Compressor):
             
         total_points = inputs.shape[0]
         loss_history = []
+        max_iters = self.warm_max_iters if is_warm else self.max_iters
+        lbfgs_iters = self.warm_lbfgs_iters if is_warm else self.lbfgs_iters
+        tag = "warm" if is_warm else "cold"
         
         #Phase 1: ADAM, mini-batches
-        adam_opt = ScimbaAdam(model, _losses_function, learning_rate=self.lr)
-        for i in range(self.max_iters):
+        # Reuse the same wrapper object across timesteps instead of building a new one
+        adam_opt = self._adam_opts.get(species_idx)
+        if adam_opt is None:
+            adam_opt = ScimbaAdam(model, _losses_function, learning_rate=self.lr)
+        for i in range(max_iters):
             key, subkey = jax.random.split(key)
             batch_idx = jax.random.choice(subkey, total_points, shape=(self.batch_size,), replace=False)
             batch = (inputs[batch_idx], targets[batch_idx])
@@ -296,26 +323,30 @@ class NeuralNetworkCompressor(Compressor):
             loss_history.append(loss_val)
             
             if self.verbose and i % 100 == 0:
-                 print(f"  [INR/{self.arch}][ADAM] iter {i:4d} - loss: {loss_val:.2e}")
+                 print(f"  [INR/{self.arch}][ADAM/{tag}] iter {i:4d} - loss: {loss_val:.2e}")
             if loss_val < self.threshold:
                 if self.verbose:
                     print(f"  [INR/{self.arch}][ADAM] early convergence at iter {i}")
                 break
+        self._adam_opts[species_idx] = adam_opt
         
         #Phase 2: L-BFGS, full-batch
         full_batch = (inputs, targets)
-        lbfgs_opt = ScimbaLBfgs(model, _losses_function)
-        for i in range(self.lbfgs_iters):
+        lbfgs_opt = self._lbfgs_opts.get(species_idx)
+        if lbfgs_opt is None:
+            lbfgs_opt = ScimbaLBfgs(model, _losses_function)
+        for i in range(lbfgs_iters):
             loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
             loss_val = float(loss_dict["total"])
             loss_history.append(loss_val)
             
-            if self.verbose and (i % 10 == 0 or i == self.lbfgs_iters - 1):
-                print(f"  [INR/{self.arch}][L-BFGS] iter {i:3d} - loss: {loss_val:.2e}")
+            if self.verbose and (i % 10 == 0 or i == lbfgs_iters - 1):
+                print(f"  [INR/{self.arch}][L-BFGS/{tag}] iter {i:3d} - loss: {loss_val:.2e}")
             if loss_val < self.threshold:
                 if self.verbose:
                     print(f"  [INR/{self.arch}][L-BFGS] convergence at iter {i}")
                 break
+        self._lbfgs_opts[species_idx] = lbfgs_opt
             
         return model, jnp.array(loss_history)
     
@@ -331,30 +362,49 @@ class NeuralNetworkCompressor(Compressor):
             
         n_species, nx, ny, nvx, nvy = f.shape
         self.original_shape = f.shape
+
+        self._n_compress_calls += 1
+        if self.clear_cache_every > 0 and self._n_compress_calls % self.clear_cache_every == 0:
+            if self.verbose:
+                print(
+                    f"[INR/{self.arch}] clearing JAX compilation caches "
+                    f"(compress call #{self._n_compress_calls}) to bound compiled-code growth"
+                )
+            jax.clear_caches()
         
         inputs = self._build_inputs(nx, ny, nvx, nvy)
         
         key = jax.random.PRNGKey(self.seed)
-        warm_models = self._load_warm_start_models(n_species, key)
+
+        # Prefer models already trained earlier in this process. Only
+        # fall back to the on-disk payload if we don't have anything in memory.
+        if self.models and len(self.models) == n_species:
+            warm_models = self.models
+        else:
+            warm_models = self._load_warm_start_models(n_species, key)
         
-        self.models = []
-        self.loss_histories = []
+        new_models = []
+        new_loss_histories = []
         
         for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
             key, subkey = jax.random.split(key)
             t0 = time.perf_counter()
-            model, loss_hist = self._fit_on_species(inputs, targets, subkey, warm_models[isp])
+            model, loss_hist = self._fit_on_species(isp, inputs, targets, subkey, warm_models[isp])
             t1 = time.perf_counter()
             
             if self.verbose:
+                tag = "warm" if warm_models[isp] is not None else "cold"
                 print(
-                    f"[INR/{self.arch}] species {isp}: final loss "
+                    f"[INR/{self.arch}] species {isp} ({tag}): final loss "
                     f"{float(loss_hist[-1]):.2e} ({t1 - t0:.2f}s)"
                 )
             
-            self.models.append(model)
-            self.loss_histories.append(loss_hist)
+            new_models.append(model)
+            new_loss_histories.append(loss_hist)
+
+        self.models = new_models
+        self.loss_histories = new_loss_histories
         
         return {"models": self.models, "grid_shape": (nx, ny, nvx, nvy)}
     

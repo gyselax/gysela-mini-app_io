@@ -123,6 +123,12 @@ plugins:
           MeshVy: $MeshVy
         exec: |
           timestep = int(it) + int(iter_offset)
+          # Snapshot the true state now: 'fdistribu' is a shared PDI buffer that
+          # read_compressed_fdistribu (below) overwrites in place with the
+          # compressor's lossy reconstruction. Diagnostics must always reflect
+          # the real trajectory, never the reconstruction, regardless of what
+          # runs after this point.
+          fdistribu_for_diag = np.array(fdistribu, copy=True)
 
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
@@ -162,7 +168,7 @@ plugins:
               }, override=True)
             comm.Barrier()
             # =================================================================================
-            bridge.send("fdistribu", fdistribu, timestep)
+            bridge.send("fdistribu", fdistribu_for_diag, timestep)
       last_iteration:
         with:
           fdistribu: $fdistribu
@@ -177,6 +183,12 @@ plugins:
           MeshVy: $MeshVy
         exec: |
           timestep = int(it) + int(iter_offset)
+          # Snapshot the true state now: 'fdistribu' is a shared PDI buffer that
+          # read_compressed_fdistribu (below) overwrites in place with the
+          # compressor's lossy reconstruction. Diagnostics must always reflect
+          # the real trajectory, never the reconstruction, regardless of what
+          # runs after this point.
+          fdistribu_for_diag = np.array(fdistribu, copy=True)
 
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
@@ -213,7 +225,7 @@ plugins:
             }, override=True)
           comm.Barrier()
           # =================================================================================
-          bridge.send("fdistribu", fdistribu, timestep)
+          bridge.send("fdistribu", fdistribu_for_diag, timestep)
       EndSimulation:
         with:
           it: $iter

@@ -205,12 +205,6 @@ class Compressor:
         reconstructed_size = self._safe_file_size(output_h5)
         compressed_size = self._safe_file_size(compressed_path)
 
-        compression_ratio = (
-            original_size / compressed_size
-            if original_size is not None and compressed_size is not None and compressed_size > 0
-            else None
-        )
-
         metrics: Dict[str, Any] = {
             "input_h5": input_h5,
             "output_h5": output_h5,
@@ -226,7 +220,6 @@ class Compressor:
             "original_size": original_size,
             "reconstructed_size": reconstructed_size,
             "compressed_size": compressed_size,
-            "compression_ratio": compression_ratio,
             "compression_seconds": self._last_compression_seconds,
             "decompression_seconds": self._last_decompression_seconds,
         }

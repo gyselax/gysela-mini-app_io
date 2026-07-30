@@ -248,7 +248,7 @@ def plot_inr_loss(data_dirs, out_dir):
     
 def resolve_out_dir(args):
     if args.output_dir:
-        return Path(args.outpu_dir)
+        return Path(args.output_dir)
     
     base = Path(args.params[0]).resolve().parent.parent / "comparisons"
     if len(args.params) <= 1:

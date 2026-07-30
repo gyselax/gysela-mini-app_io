@@ -316,7 +316,7 @@ def main():
     if args.frob_pod:
         plot_frobenius(compression_cases, out_dir, filt="pod", name="frob_error_pod")
     if args.frob_inr:
-        plot_frobenius(compression_cases, out_dir, filt="inr", name="frob_error_nn")
+        plot_frobenius(compression_cases, out_dir, filt="nn", name="frob_error_nn")
     if args.cpu_time:
         plot_cpu_time(compression_cases, out_dir)
     if args.svd_spectrum:

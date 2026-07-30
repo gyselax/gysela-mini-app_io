@@ -34,7 +34,7 @@
 #include "paraconfpp.hpp"
 #include "params.yaml.hpp"
 #include "pdi_out.yml.hpp"
-#include "predcorr.hpp"
+#include "predcorr_compress.hpp"
 #include "qnsolver.hpp"
 #include "singlemodeperturbinitialisation.hpp"
 #include "species_info.hpp"
@@ -386,7 +386,7 @@ int main(int argc, char **argv) {
   QNSolver const poisson(fft_poisson_solver, rhs);
 
   // Create predcorr operator
-  PredCorr const predcorr(vlasov, poisson);
+  PredCorrCompress const predcorr(vlasov, poisson);
 
   // Starting the code
   ddc::expose_to_pdi("Nx_spline_cells",

@@ -223,8 +223,9 @@ def compute_diagnostics(fdistribu_chunks):
         )
 
     fdistribu = np.array(fdistribu_chunks[0])  # (Nsp, Nx, Ny, Nvx, Nvy)
-    t_actual  = float(np.array(coords['absolute_time'])[0])
     timestep  = int(fdistribu_chunks[0].t)
+    # deltat is constant, unlike coords['absolute_time'] (overwritten every iteration).
+    t_actual  = timestep * float(coords['deltat'])
 
     cfg = get_measure_config()
 

@@ -266,10 +266,10 @@ int main(int argc, char **argv) {
   IdxRangeVxVyXY idxrange_vxvyxy_v2Dsplit(idxrange_spvxvyxy_v2Dsplit);
   IdxRangeXYVxVy idxrange_xyvxvy_x2Dsplit(idxrange_spxyvxvy_x2Dsplit);
 
-  SplineXBuilder const builder_x(idxrange_x);
-  SplineYBuilder const builder_y(idxrange_y);
-  SplineVxBuilder const builder_vx(idxrange_vx);
-  SplineVyBuilder const builder_vy(idxrange_vy);
+  SplineInterpolatorX const interpolator_x(idxrange_x);
+  SplineInterpolatorY const interpolator_y(idxrange_y);
+  SplineInterpolatorVx const interpolator_vx(idxrange_vx);
+  SplineInterpolatorVy const interpolator_vy(idxrange_vy);
 
   IdxRangeSpVxVy idxrange_spvxvy_local(idxrange_spxyvxvy_x2Dsplit);
 
@@ -291,6 +291,16 @@ int main(int argc, char **argv) {
     iter_offset =
         static_cast<int>(PCpp_int(configs.conf_gyselax, ".Input.iter_offset"));
   }
+  int compression_period = 0;
+  if (!PC_status(PC_get(configs.conf_gyselax, ".CompressionBenchmark.compression_period"))) {
+    compression_period = static_cast<int>(
+        PCpp_int(configs.conf_gyselax, ".CompressionBenchmark.compression_period"));
+  }
+  int compression_mode = 0;  // 0 = none, 1 = online (pycall), 2 = offline (deisa-dask)
+  if (!PC_status(PC_get(configs.conf_gyselax, ".CompressionBenchmark.compression_mode"))) {
+    compression_mode = static_cast<int>(
+        PCpp_int(configs.conf_gyselax, ".CompressionBenchmark.compression_mode"));
+  }
 
   if (rank == 0) {
     std::cout << "Input fdistribu file name: " << fdistribu_filename
@@ -311,6 +321,7 @@ int main(int argc, char **argv) {
 
   IdxRangeSpXYVxVy idxrange_spxyvxvy_v2Dsplit(idxrange_spvxvyxy_v2Dsplit);
   PDI_expose_idx_range(idxrange_spxyvxvy_v2Dsplit, "local_fdistribu");
+  PDI_expose_idx_range(idxrange_glob_spxyvxvy, "global_fdistribu");
 
   if (nb_restart == 0) {
     init_case(idx_range_kinsp, configs, transpose, allfequilibrium,
@@ -344,51 +355,26 @@ int main(int argc, char **argv) {
       static_cast<int>(PCpp_int(configs.conf_gyselax, ".Algorithm.nbiter"));
 
   // --> Output info
-  double const time_diag =
-      PCpp_double(configs.conf_gyselax, ".Output.time_diag");
-  int const nbstep_diag = int(time_diag / deltat);
+  int const nbstep_diag =
+      static_cast<int>(PCpp_int(configs.conf_gyselax, ".Output.nbiter_diag"));
 
-  // Create spline evaluator
-  ddc::PeriodicExtrapolationRule<X> bv_x_min;
-  ddc::PeriodicExtrapolationRule<X> bv_x_max;
-  SplineXEvaluator const spline_x_evaluator(bv_x_min, bv_x_max);
-
-  ddc::PeriodicExtrapolationRule<Y> bv_y_min;
-  ddc::PeriodicExtrapolationRule<Y> bv_y_max;
-  SplineYEvaluator const spline_y_evaluator(bv_y_min, bv_y_max);
-
-  ddc::ConstantExtrapolationRule<Vx> bv_vx_min(
-      ddc::coordinate(idxrange_vx.front()));
-  ddc::ConstantExtrapolationRule<Vx> bv_vx_max(
-      ddc::coordinate(idxrange_vx.back()));
-  SplineVxEvaluator const spline_vx_evaluator(bv_vx_min, bv_vx_max);
-
-  ddc::ConstantExtrapolationRule<Vy> bv_vy_min(
-      ddc::coordinate(idxrange_vy.front()));
-  ddc::ConstantExtrapolationRule<Vy> bv_vy_max(
-      ddc::coordinate(idxrange_vy.back()));
-  SplineVyEvaluator const spline_vy_evaluator(bv_vy_min, bv_vy_max);
 
   // Create advection operator
-  BslAdvectionSpatial<GeometryVxVyXY, GridX, SplineXBuilder,
-                      SplineXEvaluator> const advection_x(builder_x,
-                                                          spline_x_evaluator);
-  BslAdvectionSpatial<GeometryVxVyXY, GridY, SplineYBuilder,
-                      SplineYEvaluator> const advection_y(builder_y,
-                                                          spline_y_evaluator);
-  BslAdvectionVelocity<GeometryXYVxVy, GridVx, SplineVxBuilder,
-                       SplineVxEvaluator> const
-      advection_vx(builder_vx, spline_vx_evaluator);
-  BslAdvectionVelocity<GeometryXYVxVy, GridVy, SplineVyBuilder,
-                       SplineVyEvaluator> const
-      advection_vy(builder_vy, spline_vy_evaluator);
+  BslAdvectionSpatial<GeometryVxVyXY, SplineInterpolatorX, Real> const
+      advection_x(interpolator_x);
+  BslAdvectionSpatial<GeometryVxVyXY, SplineInterpolatorY, Real> const
+      advection_y(interpolator_y);
+  BslAdvectionVelocity<GeometryXYVxVy, SplineInterpolatorVx, Real> const
+      advection_vx(interpolator_vx);
+  BslAdvectionVelocity<GeometryXYVxVy, SplineInterpolatorVy, Real> const
+      advection_vy(interpolator_vy);
 
   MpiSplitVlasovSolver const vlasov(advection_x, advection_y, advection_vx,
                                     advection_vy, transpose);
 
   DFieldMemVxVy const quadrature_coeffs(
       neumann_spline_quadrature_coefficients<Kokkos::DefaultExecutionSpace>(
-          idxrange_vxvy, builder_vx, builder_vy));
+          idxrange_vxvy, interpolator_vx.get_builder(), interpolator_vy.get_builder()));
   DFieldMemVxVy local_quadrature_coeffs(idxrange_vxvy_v2Dsplit);
   ddc::parallel_deepcopy(get_field(local_quadrature_coeffs),
                          quadrature_coeffs[idxrange_vxvy_v2Dsplit]);
@@ -416,6 +402,8 @@ int main(int argc, char **argv) {
   expose_mesh_to_pdi("MeshVx", idxrange_vx);
   expose_mesh_to_pdi("MeshVy", idxrange_vy);
   ddc::expose_to_pdi("nbstep_diag", nbstep_diag);
+  ddc::expose_to_pdi("nb_step_compression", compression_period);
+  ddc::expose_to_pdi("compression_mode", compression_mode);
   ddc::expose_to_pdi("deltat", deltat);
   ddc::expose_to_pdi("Nkinspecies", idx_range_kinsp.size());
   ddc::expose_to_pdi("fdistribu_charges",
@@ -429,11 +417,16 @@ int main(int argc, char **argv) {
     ddc::PdiEvent("initial_state").with("fdistribu_eq", allfequilibrium_host);
   }
 
+  ddc::PdiEvent("Init");
+  ddc::PdiEvent("InitBridge");
+
   steady_clock::time_point const start = steady_clock::now();
 
   predcorr(get_field(allfdistribu_v2D_split), deltat, nbiter);
 
   steady_clock::time_point const end = steady_clock::now();
+
+  ddc::PdiEvent("EndSimulation").with("iter", nbiter);
 
   double const simulation_time =
       std::chrono::duration<double>(end - start).count();

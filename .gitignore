@@ -9,3 +9,4 @@
 *.dump
 compile_commands.json
 *.h5
+*.csv

@@ -14,7 +14,7 @@ MACHINE="${1:-${GYSELA_MACHINE:-}}"
 if [[ -z "${MACHINE}" ]]; then
   host="$(hostname -s 2>/dev/null || hostname)"
   case "${host}" in
-    persee*) MACHINE="persee/v100" ;;
+    persee*) MACHINE="persee/xeon" ;;
   esac
 fi
 
@@ -22,14 +22,14 @@ if [[ -z "${MACHINE}" ]]; then
   echo "Usage: $0 <MACHINE>" >&2
   echo "Example: $0 persee/xeon" >&2
   echo "Or set GYSELA_MACHINE=persee/xeon" >&2
-  echo "Toolchains: src/external/gyselalibxx/toolchains/" >&2
+  echo "Toolchains: toolchains/" >&2
   exit 1
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${REPO_ROOT}"
 
-TOOLCHAIN_DIR="${REPO_ROOT}/src/external/gyselalibxx/toolchains/${MACHINE}"
+TOOLCHAIN_DIR="${REPO_ROOT}/toolchains/${MACHINE}"
 ENV_SH="${TOOLCHAIN_DIR}/environment.sh"
 TOOLCHAIN_CMAKE="${TOOLCHAIN_DIR}/toolchain.cmake"
 

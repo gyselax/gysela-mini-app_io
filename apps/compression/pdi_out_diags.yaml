@@ -114,6 +114,7 @@ plugins:
           it: $iter
           t: $absolute_time
           iter_offset: $iter_offset
+          deltat: $deltat
           nbstep_diag: $nbstep_diag
           nb_step_compression: $nb_step_compression
           compression_mode: $compression_mode
@@ -168,6 +169,7 @@ plugins:
                 'MeshVy': np.array(MeshVy),
                 'iter': timestep,
                 'absolute_time': np.array([float(t)]),
+                'deltat': float(deltat),
               }, override=True)
             comm.Barrier()
             # =================================================================================
@@ -178,6 +180,7 @@ plugins:
           it: $iter
           t: $absolute_time
           iter_offset: $iter_offset
+          deltat: $deltat
           nb_step_compression: $nb_step_compression
           compression_mode: $compression_mode
           MeshX: $MeshX
@@ -228,6 +231,7 @@ plugins:
               'MeshVy': np.array(MeshVy),
               'iter': timestep,
               'absolute_time': np.array([float(t)]),
+              'deltat': float(deltat),
             }, override=True)
           comm.Barrier()
           # =================================================================================

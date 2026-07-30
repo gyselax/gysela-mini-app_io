@@ -93,7 +93,8 @@ def plot_diags(diags_filenames, output=None):
         label = os.path.basename(os.path.dirname(os.path.abspath(path))) or os.path.basename(path)
         datasets.append((label, data))
 
-    n = len(RAW_QUANTITIES) + len(CONSERVED_QUANTITIES)
+    has_cpu_time = any("cpu_time" in data for _, data in datasets)
+    n = len(RAW_QUANTITIES) + len(CONSERVED_QUANTITIES) + (1 if has_cpu_time else 0)
     fig, axs = plt.subplots(n, 1, figsize=(DIAG_FIG_WIDTH, DIAG_ROW_HEIGHT * n), sharex=True)
 
     for ax, (col, ylabel) in zip(axs, RAW_QUANTITIES):
@@ -118,7 +119,95 @@ def plot_diags(diags_filenames, output=None):
         if len(datasets) > 1:
             ax.legend()
 
+    if has_cpu_time:
+        ax = axs[-1]
+        for label, data in datasets:
+            if "cpu_time" not in data:
+                continue
+            ax.plot(data["time"], data["cpu_time"], label=label)
+        ax.set_ylabel("CPU time [s]")
+        ax.grid(True, which="both")
+        if len(datasets) > 1:
+            ax.legend()
+
     axs[-1].set_xlabel("Time")
+    fig.tight_layout()
+
+    if output:
+        fig.savefig(output, bbox_inches="tight")
+        print(f"Plot written to: {output}")
+    else:
+        plt.show()
+
+    plt.close(fig)
+
+
+def _load_final_snapshot(branch_dir, species=0):
+    """Load the final fdistribu snapshot (one species, global domain) and mesh
+    coordinates written by the "last_iteration" PDI event for one branch's
+    work directory (GYSELALIBXX_<iter>.h5 + GYSELALIBXX_initstate.h5).
+    """
+    import h5py
+
+    snapshot_paths = sorted(glob.glob(os.path.join(branch_dir, "GYSELALIBXX_[0-9]*.h5")))
+    if not snapshot_paths:
+        raise FileNotFoundError(f"No final snapshot GYSELALIBXX_<iter>.h5 found in {branch_dir!r}")
+
+    with h5py.File(snapshot_paths[-1], "r") as f:
+        fdistribu = np.asarray(f["fdistribu"][species])
+        time_saved = float(np.asarray(f["time_saved"]))
+
+    initstate_path = os.path.join(branch_dir, "GYSELALIBXX_initstate.h5")
+    with h5py.File(initstate_path, "r") as f:
+        bounds = (
+            float(np.asarray(f["MeshX"]).min()), float(np.asarray(f["MeshX"]).max()),
+            float(np.asarray(f["MeshY"]).min()), float(np.asarray(f["MeshY"]).max()),
+            float(np.asarray(f["MeshVx"]).min()), float(np.asarray(f["MeshVx"]).max()),
+            float(np.asarray(f["MeshVy"]).min()), float(np.asarray(f["MeshVy"]).max()),
+        )
+
+    return fdistribu, bounds, time_saved
+
+
+def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, output=None):
+    """Compare the final fdistribu snapshot of the baseline branch against the
+    first compressed branch found, side by side, plus their difference.
+
+    Looks for a "branch_baseline" directory and the first other "branch_*"
+    directory under run_dir that has a final GYSELALIBXX_<iter>.h5 snapshot.
+    Saves to output path if given, otherwise shows interactively.
+    """
+    branch_dirs = sorted(
+        d for d in glob.glob(os.path.join(run_dir, "branch_*"))
+        if os.path.isdir(d) and glob.glob(os.path.join(d, "GYSELALIBXX_[0-9]*.h5"))
+    )
+    baseline_dir = next((d for d in branch_dirs if os.path.basename(d) == "branch_baseline"), None)
+    other_dirs = [d for d in branch_dirs if d != baseline_dir]
+
+    if baseline_dir is None or not other_dirs:
+        print("\nMissing baseline or compressed final snapshot -- skipping snapshot comparison plot.")
+        return
+    compressed_dir = other_dirs[0]
+
+    baseline_f, bounds, _ = _load_final_snapshot(baseline_dir, species=species)
+    compressed_f, _, _ = _load_final_snapshot(compressed_dir, species=species)
+
+    extent = _plane_extent(bounds, plane)
+    baseline_2d, axes_labels = _slice_2d(baseline_f, plane=plane, index=index)
+    compressed_2d, _ = _slice_2d(compressed_f, plane=plane, index=index)
+    diff_2d = compressed_2d - baseline_2d
+
+    fig, axs = plt.subplots(1, 3, figsize=(3 * COMBINED_COL_WIDTH, COMBINED_ROW_HEIGHT))
+    for ax, data, title in (
+        (axs[0], baseline_2d, os.path.basename(baseline_dir)),
+        (axs[1], compressed_2d, os.path.basename(compressed_dir)),
+        (axs[2], diff_2d, "difference"),
+    ):
+        im = ax.imshow(np.asarray(data).T, origin="lower", aspect="auto", extent=extent)
+        ax.set_title(title)
+        ax.set_xlabel(axes_labels[0])
+        ax.set_ylabel(axes_labels[1])
+        fig.colorbar(im, ax=ax, fraction=0.046)
     fig.tight_layout()
 
     if output:
@@ -146,6 +235,7 @@ def _slice_2d(array_4d, plane="xvx", index=None):
 
     plane="xvx": fix (y, vy) at `index` (default: central indices), return (nx, nvx).
     plane="xy": fix (vx, vy) at `index`, return (nx, ny).
+    plane="yvy": fix (x, vx) at `index`, return (ny, nvy).
     plane="vxvy": fix (x, y) at `index`, return (nvx, nvy).
     """
     nx, ny, nvx, nvy = array_4d.shape
@@ -155,11 +245,14 @@ def _slice_2d(array_4d, plane="xvx", index=None):
     elif plane == "xy":
         ivx, ivy = index if index is not None else (nvx // 2, nvy // 2)
         return array_4d[:, :, ivx, ivy], (r"$x$", r"$y$")
+    elif plane == "yvy":
+        ix, ivx = index if index is not None else (nx // 2, nvx // 2)
+        return array_4d[ix, :, ivx, :], (r"$y$", r"$v_y$")
     elif plane == "vxvy":
         ix, iy = index if index is not None else (nx // 2, ny // 2)
         return array_4d[ix, iy, :, :], (r"$v_x$", r"$v_y$")
     else:
-        raise ValueError(f"Unknown plane {plane!r}, expected 'xvx', 'xy', or 'vxvy'")
+        raise ValueError(f"Unknown plane {plane!r}, expected 'xvx', 'xy', 'yvy', or 'vxvy'")
 
 
 def evaluate_rank(data_dir, it, rank, species=0):
@@ -278,8 +371,8 @@ def evaluate_global_domain(data_dir, it, species=0):
     return (x_c, y_c, vx_c, vy_c), global_target[species], recon, rank_regions
 
 
-_PLANE_AXES = {"xvx": (0, 2), "xy": (0, 1), "vxvy": (2, 3)}  # (x, y, vx, vy) -> plane axis indices
-_PLANE_FIXED_AXES = {"xvx": (1, 3), "xy": (2, 3), "vxvy": (0, 1)}  # axes held fixed, _slice_2d's index order
+_PLANE_AXES = {"xvx": (0, 2), "xy": (0, 1), "yvy": (1, 3), "vxvy": (2, 3)}  # (x, y, vx, vy) -> plane axis indices
+_PLANE_FIXED_AXES = {"xvx": (1, 3), "xy": (2, 3), "yvy": (0, 2), "vxvy": (0, 1)}  # axes held fixed, _slice_2d's index order
 _RANK_COLORS = [f"C{i}" for i in range(10)]  # matplotlib's default color cycle
 _RANK_LINESTYLES = ["-", "--", ":", "-."]
 

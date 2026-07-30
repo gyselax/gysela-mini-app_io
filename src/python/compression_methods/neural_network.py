@@ -470,6 +470,7 @@ class OnlineNeuralNetworkCompressor:
         seed: int = 42,
         verbose: bool = False,
         debug_plot: bool = False,
+        save_target: bool = False,
     ):
         if arch not in AVAILABLE_INR_ARCHS:
             raise ValueError(f"Unknown arch {arch!r}. Available: {AVAILABLE_INR_ARCHS}")
@@ -485,6 +486,7 @@ class OnlineNeuralNetworkCompressor:
         self.seed = int(seed)
         self.verbose = bool(verbose)
         self.debug_plot = bool(debug_plot)
+        self.save_target = bool(save_target)
 
         self._key = jax.random.PRNGKey(self.seed)
         self.models: Optional[list] = None        # one eqx.Module per species, warm-started
@@ -694,7 +696,8 @@ class OnlineNeuralNetworkCompressor:
         for isp, model in enumerate(self.models):
             flat, _ = ravel_pytree(model)
             payload[f"weights_{isp}"] = np.asarray(flat)
-            payload[f"target_{isp}"] = self._last_local_array[isp]
+            if self.save_target:
+                payload[f"target_{isp}"] = self._last_local_array[isp]
 
         np.savez_compressed(path, **payload)
 
@@ -706,12 +709,14 @@ def load_online_params(path: str) -> dict:
     models (list of eqx.Module, one per species, ready to evaluate on the
     unit-cell grid built by `OnlineNeuralNetworkCompressor._build_local_inputs`),
     and target (np.ndarray, shape (n_species, nx, ny, nvx, nvy) -- the local
-    data the models were fit on).
+    data the models were fit on -- or None if the payload was saved with
+    `save_target=False`).
     """
     with np.load(path, allow_pickle=False) as payload:
         metadata = json.loads(str(payload["metadata_json"].item()))
         n_species = int(metadata["n_species"])
         arch = metadata["arch"]
+        has_target = f"target_0" in payload.files
 
         key = jax.random.PRNGKey(0)
         models = []
@@ -721,7 +726,8 @@ def load_online_params(path: str) -> dict:
             _, unravel_fn = ravel_pytree(template)
             flat = jnp.asarray(payload[f"weights_{isp}"])
             models.append(unravel_fn(flat))
-            targets.append(np.asarray(payload[f"target_{isp}"]))
+            if has_target:
+                targets.append(np.asarray(payload[f"target_{isp}"]))
 
     local_bounds = metadata.get("local_bounds")
     return {
@@ -731,7 +737,7 @@ def load_online_params(path: str) -> dict:
         "local_shape": tuple(metadata["local_shape"]),
         "local_bounds": tuple(local_bounds) if local_bounds is not None else None,
         "models": models,
-        "target": np.stack(targets),
+        "target": np.stack(targets) if has_target else None,
     }
 
 # Offline continuation (fine-tune a saved online network without rerunning the simulation)
@@ -784,6 +790,11 @@ def continue_training_offline(
     `run_online_networks`, ...) can load unchanged.
     """
     target = payload["target"]
+    if target is None:
+        raise ValueError(
+            "continue_training_offline requires target data, but this payload "
+            "was saved with save_target=False."
+        )
     n_species = target.shape[0]
     species_idx = list(range(n_species)) if species is None else list(species)
 

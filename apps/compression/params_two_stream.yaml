@@ -11,11 +11,11 @@ SplineMesh:
   y_min: 0.0
   y_max: 31.41592653589793
   y_ncells : 32
-  vx_min: -7
-  vx_max: +7
+  vx_min: -10
+  vx_max: +10
   vx_ncells: 33
-  vy_min: -7
-  vy_max: +7
+  vy_min: -10
+  vy_max: +10
   vy_ncells: 33
 
 SpeciesInfo:
@@ -23,7 +23,7 @@ SpeciesInfo:
   mass: 1
   density_eq: 1.
   temperature_eq: 1.
-  mean_velocity_eq: 2.4   # stream speed v0 for two_stream (Input.case)
+  mean_velocity_eq: 3   # stream speed v0 for two_stream (Input.case)
   perturb_amplitude: 0.05
   perturb_mode: 1
 

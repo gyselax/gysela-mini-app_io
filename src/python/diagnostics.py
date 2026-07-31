@@ -221,7 +221,7 @@ def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
     # and republishes t_actual before the one attached to the fdistribu chunk could be used)
     # t_actual  = float(np.array(coords['absolute_time'])[0])
     timestep  = int(fdistribu[0].t)
-    t_actual = timestep * float(np.array(deltat[0]).reshape(-1)[0])
+    t_actual = timestep * float(deltat[0][0].compute())
 
     cfg = get_measure_config()
 

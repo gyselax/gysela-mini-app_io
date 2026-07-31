@@ -8,7 +8,7 @@ Benchmark pipeline for evaluating restart-file compression in a 2D2V Vlasov--Poi
 | --- | --- |
 | `gys_compress.cpp` | C++ mini-app: cold start and restart via PDI, writes `GYSELALIBXX_*.h5`. |
 | `launch_benchmark.py` | Orchestrates the full benchmark: Dask lifecycle, in-situ diagnostics, PCA compression at every restart point, `compression_events.yaml`. |
-| `evaluate_compression.py` | Reads `diagnostics.csv` from both branches and generates `compression_analysis.png`. |
+| `evaluate_compression.py` | Two subcommands: `diagnostics` plots `diagnostics.csv` files; `online-networks` reloads saved `params_iterXXXXX_rankXXX.npz` payloads and plots the global multi-rank reconstruction / each rank's local network against the local data it was trained on. |
 | `PCA.py` | PCA compressor for `fdistribu[sp, x, y, vx, vy]`. |
 | `params_landau_damping.yaml` | Landau-damping input for `launch_benchmark.py`. |
 | `params_two_stream.yaml` | Two-stream instability input. |
@@ -89,10 +89,22 @@ Each entry in `compression_events.yaml` records: segment id, absolute iteration,
 ## Evaluating a run
 
 ```bash
-python apps/compression/evaluate_compression.py [run_dir]
+python apps/compression/evaluate_compression.py diagnostics <data_dir>/branch_baseline/diagnostics.csv <data_dir>/branch_compressed/diagnostics.csv -o compression_analysis.png
 ```
 
-Reads `diagnostics.csv` from both branches (deduplicating restart-boundary rows) and writes `compression_analysis.png`. Compression statistics come from `compression_events.yaml`.
+Reads one or more `diagnostics.csv` files (deduplicating restart-boundary rows) and overlays them; omit `-o` to show interactively instead of saving.
+
+## Online (in-situ) neural-network compressor
+
+`OnlineNeuralNetworkCompressor` (`src/python/compression_methods/neural_network.py`) fits one small INR per species directly on each MPI rank's local `fdistribu` chunk, warm-started across calls. Every call from `apply_online_compression` also writes `params_iterXXXXX_rankXXX.npz` into the run's data directory, containing that rank's current network weights plus the local data chunk it was just fit on.
+
+Evaluate a saved snapshot:
+
+```bash
+python apps/compression/evaluate_compression.py online-networks <data_dir> --iter <ITER> --rank <RANK>
+```
+
+`--rank` takes one or more ranks, or can be omitted entirely to use every rank found for that iteration. The top row loads every rank's `.npz` for that iteration, tiles their local data into the full global domain, and compares it against the partition-of-unity reconstruction (`assemble_global_field`) assembled from all ranks' networks, with one colored box per requested rank marking where its subdomain sits within the full domain. Each requested rank then gets its own row below, plotting its own network against the local data it was trained on, framed in the same color as its box in the top row -- so `--rank 1 2 3` produces a 4-row figure. Use `--species` and `--plane {xvx,xy,vxvy}` (default `xvx`) to pick which species and 2D slice to plot. The plot is always written into `<data_dir>` as `eval_iter<ITER>_rank<RANK[-RANK...]>_species<SPECIES>_<PLANE>.png`.
 
 ## PCA compressor
 
@@ -109,4 +121,4 @@ COMPRESSOR_PARAMS = {"n_components": 8, "normalisation": "none", "clip_nonnegati
 2. Adjust `params_landau_damping.yaml` (or set `SOURCE_GYSELA_YAML`) with `Algorithm.nbiter`, `Algorithm.deltat`, `Output.time_diag`, and `CompressionBenchmark.compression_period`.
 3. Implement your compressor in `src/python/compression_methods/` using the `Compressor` blueprint.
 4. Set `COMPRESSOR_CLASS` and `COMPRESSOR_PARAMS` in `launch_benchmark.py`.
-5. Run `launch_benchmark.py`, then `evaluate_compression.py`.
+5. Run `launch_benchmark.py`, then `evaluate_compression.py diagnostics`.

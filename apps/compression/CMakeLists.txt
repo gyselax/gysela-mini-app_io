@@ -1,4 +1,4 @@
-add_executable(gys_compress gys_compress.cpp)
+add_executable(gys_compress gys_compress.cpp predcorr_compress.cpp)
 
 target_include_directories(gys_compress
     PRIVATE

@@ -11,11 +11,11 @@ SplineMesh:
   y_min: 0.0
   y_max: 31.41592653589793
   y_ncells : 32
-  vx_min: -15.707963267948966
-  vx_max: +15.707963267948966
+  vx_min: -10
+  vx_max: +10
   vx_ncells: 33
-  vy_min: -15.707963267948966
-  vy_max: +15.707963267948966
+  vy_min: -10
+  vy_max: +10
   vy_ncells: 33
 
 SpeciesInfo:
@@ -23,16 +23,16 @@ SpeciesInfo:
   mass: 1
   density_eq: 1.
   temperature_eq: 1.
-  mean_velocity_eq: 3.   # stream speed v0 for two_stream (Input.case)
+  mean_velocity_eq: 3   # stream speed v0 for two_stream (Input.case)
   perturb_amplitude: 0.05
   perturb_mode: 1
 
 Algorithm:
   deltat: 0.1
-  nbiter: 400
+  nbiter: 200
 
 CompressionBenchmark:
   compression_period: 10
 
 Output:
-  nbiter_diag: 2  # diagnostics every N timesteps (must divide compression_period)
+  nbiter_diag: 1  # diagnostics every N timesteps (must divide compression_period)

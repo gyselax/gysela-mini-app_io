@@ -15,7 +15,7 @@ import csv
 # ------------------------------------------------------------------
 # Compression params / names
 # ------------------------------------------------------------------
-from evaluate_compression import plot_diags
+from evaluate_compression import plot_diags, plot_final_snapshot_comparison
 
 
 GYS_COMPRESS_BIN = "./build/apps/compression/gys_compress"
@@ -23,11 +23,10 @@ GYS_COMPRESS_BIN = "./build/apps/compression/gys_compress"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
-SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
+SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_two_stream.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
 ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
 COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")
-SCHEFILE = os.path.join(BASE_DIR, "scheduler.json")
 
 # ------------------------------------------------------------------
 # Toolchain resolution: a single --arch flag picks
@@ -389,18 +388,25 @@ def _node_launch_prefix(node):
     return ["srun", "-w", node, "-N", "1", "--ntasks-per-node", "1", "--overlap"]
 
 
-def start_dask(deisa_env, n_workers=1):
-    """Start the Dask scheduler and worker(s), each on their own dedicated node.
-    Returns (sch_proc, worker_proc, updated_env)."""
-    if os.path.exists(SCHEFILE):
-        os.remove(SCHEFILE)
+def start_dask(deisa_env, work_dir, n_workers=1):
+    """Start the Dask scheduler and worker(s), each on their own dedicated node on
+    Adastra (else locally). Returns (sch_proc, worker_proc, updated_env).
+
+    The scheduler file lives inside work_dir (rather than a fixed repo-wide
+    path) so that concurrent launch_benchmark.py runs against different
+    run_dirs don't race on the same file -- each branch's own work_dir is
+    unique per invocation.
+    """
+    schefile = os.path.join(work_dir, "scheduler.json")
+    if os.path.exists(schefile):
+        os.remove(schefile)
 
     scheduler_node, worker_node, _ = resolve_role_nodes()
 
     sch_proc = subprocess.Popen(
         _node_launch_prefix(scheduler_node) + [
             "dask-scheduler",
-            f"--scheduler-file={SCHEFILE}",
+            f"--scheduler-file={schefile}",
             "--port", "0",
             "--dashboard-address", ":0",
         ],
@@ -409,7 +415,7 @@ def start_dask(deisa_env, n_workers=1):
 
     print("  Waiting for Dask scheduler", end="", flush=True)
     deadline = time.time() + 60
-    while not os.path.exists(SCHEFILE):
+    while not os.path.exists(schefile):
         if time.time() > deadline:
             sch_proc.kill()
             raise RuntimeError("Dask scheduler did not start within 60 seconds.")
@@ -417,7 +423,7 @@ def start_dask(deisa_env, n_workers=1):
         print(".", end="", flush=True)
     print(" ready")
 
-    with open(SCHEFILE) as f:
+    with open(schefile) as f:
         scheduler_address = json.load(f)["address"]
 
     deisa_env = dict(deisa_env)
@@ -428,7 +434,7 @@ def start_dask(deisa_env, n_workers=1):
             "dask-worker",
             f"--nworkers={n_workers}",
             "--local-directory=/tmp",
-            f"--scheduler-file={SCHEFILE}",
+            f"--scheduler-file={schefile}",
         ],
         env=deisa_env,
     )
@@ -490,7 +496,7 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
     os.makedirs(work_dir, exist_ok=True)
 
     deisa_env = load_deisa_env()
-    sch_proc, worker_proc, deisa_env = start_dask(deisa_env, n_workers)
+    sch_proc, worker_proc, deisa_env = start_dask(deisa_env, work_dir, n_workers)
 
     if extra_env:
         deisa_env = dict(deisa_env)
@@ -665,6 +671,9 @@ def compare_results(run_dir):
 
     output = os.path.join(run_dir, "diags_comparison.png")
     plot_diags(diag_files, output=output)
+
+    snapshot_output = os.path.join(run_dir, "final_snapshot_comparison.png")
+    plot_final_snapshot_comparison(run_dir, output=snapshot_output)
 
 
 # ------------------------------------------------------------------

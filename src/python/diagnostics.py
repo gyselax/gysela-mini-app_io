@@ -1,6 +1,7 @@
 """In-situ diagnostics: conserved-variable calculations and deisa analytics callback."""
 
 import csv
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,6 +13,11 @@ from distributed import get_client
 import compression_diagnostics
 
 _MEASURE_CFG = None
+
+# Wall-clock reference point for this process, taken as soon as diagnostics.py
+# starts (i.e. essentially when the simulation launches). Elapsed time from
+# here covers simulation, compression, and diagnostics running concurrently.
+_START_TIME = time.monotonic()
 
 
 @dataclass
@@ -169,6 +175,7 @@ def measure(cfg, f, Efield, it, t_actual):
     data = {
         "iter":       it,
         "time":       float(t_actual),
+        "cpu_time":   time.monotonic() - _START_TIME,
         "ekin":       ekin,
         "epot":       epot,
         "etot":       ekin + epot,
@@ -218,11 +225,10 @@ def compute_diagnostics(fdistribu_chunks):
         )
 
     fdistribu = np.array(fdistribu_chunks[0])  # (Nsp, Nx, Ny, Nvx, Nvy)
-    # This caused a race condition conflict on persee (sim runs faster then the diagnostics
-    # and republishes t_actual before the one attached to the fdistribu chunk could be used)
-    # t_actual  = float(np.array(coords['absolute_time'])[0])
     timestep  = int(fdistribu_chunks[0].t)
-    t_actual = timestep * float(coords['deltat'])
+    # deltat is constant, unlike coords['absolute_time'] (overwritten every iteration and
+    # racy when the sim outruns the diagnostics worker, e.g. on persee).
+    t_actual  = timestep * float(coords['deltat'])
 
     cfg = get_measure_config()
 

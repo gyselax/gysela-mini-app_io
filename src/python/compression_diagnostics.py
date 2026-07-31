@@ -21,10 +21,10 @@ _COMPRESSION_CFG = None
 _OFFLINE_COMPRESSION_CFG = None
 
 
-def get_compression_config(data_dir="."):
+def get_compression_config(data_dir=".", rank=None):
     global _COMPRESSION_CFG
     if _COMPRESSION_CFG is None:
-        _COMPRESSION_CFG = CompressionConfig(Path(data_dir), build_online_compressor())
+        _COMPRESSION_CFG = CompressionConfig(Path(data_dir), build_online_compressor(rank=rank))
     return _COMPRESSION_CFG
 
 
@@ -45,14 +45,24 @@ def _write_compression_event_csv(event_path, record):
         writer.writerow(record)
 
 
-def apply_online_compression(fdistribu, timestep, rank):
+def apply_online_compression(fdistribu, timestep, rank, local_bounds=None):
     """Rank-local compress/decompress round trip. Mutates fdistribu in place.
+
+    local_bounds, if given, is the local chunk's physical bounding box
+    (x_min, x_max, y_min, y_max, vx_min, vx_max, vy_min, vy_max) within the
+    global mesh; compressors that fit a local model (e.g.
+    OnlineNeuralNetworkCompressor) record it so a downstream tool can later
+    reassemble a global field from the per-rank local models.
     """
-    cfg = get_compression_config()
-    approx, metrics = cfg.compressor.compress_decompress_array(fdistribu, rank=rank)
-    fdistribu[...] = approx
+    cfg = get_compression_config(rank=rank)
+    approx, metrics = cfg.compressor.compress_decompress_array(fdistribu, rank=rank, local_bounds=local_bounds)
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
+
+    if hasattr(cfg.compressor, "save_params"):
+        params_path = cfg.data_dir / f"params_iter{timestep:05d}_rank{rank:03d}.npz"
+        cfg.compressor.save_params(params_path, rank=rank, timestep=timestep)
+
     event_path = cfg.data_dir / f"compression_events_rank{rank:03d}.csv"
 
     record = {"iter": timestep, "rank": rank}
@@ -61,6 +71,8 @@ def apply_online_compression(fdistribu, timestep, rank):
         record[f"param_{key}"] = value
 
     _write_compression_event_csv(event_path, record)
+    
+    fdistribu[...] = approx
     return fdistribu
 
 

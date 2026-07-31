@@ -113,6 +113,7 @@ plugins:
           fdistribu: $fdistribu
           it: $iter
           t: $absolute_time
+          deltat: $deltat
           iter_offset: $iter_offset
           deltat: $deltat
           nbstep_diag: $nbstep_diag
@@ -179,6 +180,7 @@ plugins:
           fdistribu: $fdistribu
           it: $iter
           t: $absolute_time
+          deltat: $deltat
           iter_offset: $iter_offset
           deltat: $deltat
           nb_step_compression: $nb_step_compression

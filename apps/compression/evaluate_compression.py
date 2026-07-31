@@ -278,7 +278,6 @@ def parse_args():
     parser.add_argument("--svd-spectrum", action="store_true")
     parser.add_argument("--inr-loss", action="store_true")
     parser.add_argument("--cpu-time", action="store_true")
-    parser.add_argument("--compression-ratio", action="store_true")
     parser.add_argument("-o","--output-dir", type=str, default=None, help="Output directory for figures (also used by --summary)")
     
     return parser.parse_args()

@@ -133,6 +133,7 @@ def electric_field_from_potential(phi, grid):
 def electric_field_energy(Efield, grid):
     return 0.5 * da.sum(Efield ** 2) * grid.dV_2D
 
+_INITIALIZED_DIAG_FILES = set()
 
 def measure(cfg, f, Efield, it, t_actual):
     """Compute and append conserved-variable diagnostics for a 4D f[x, y, vx, vy]."""
@@ -179,7 +180,8 @@ def measure(cfg, f, Efield, it, t_actual):
         "momentum_y": momentum_y,
     }
 
-    reset = it == 0
+    reset = diag_file_path not in _INITIALIZED_DIAG_FILES
+    _INITIALIZED_DIAG_FILES.add(diag_file_path)
     write_header = reset or not diag_file_path.is_file()
     with open(diag_file_path, mode="w" if reset else "a", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=data.keys())
@@ -204,8 +206,8 @@ def compute_offline_compression(fdistribu_chunks):
     deisa.set("fdistribu_offline_done", True, timestep=timestep)
 
 
-@deisa.register("fdistribu", "absolute_time", "MeshX", "MeshY", "MeshVx", "MeshVy")
-def compute_diagnostics(fdistribu, time, mx, my, mvx, mvy):
+@deisa.register("fdistribu", "absolute_time", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
+def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
 
     if _MEASURE_CFG is None:
         init_measure_config(
@@ -215,8 +217,11 @@ def compute_diagnostics(fdistribu, time, mx, my, mvx, mvy):
             vy = mvy[0],
         )
 
-    t_actual  = float(time[0][0])
+    # This caused a race condition conflict on persee (sim runs faster then the diagnostics
+    # and republishes t_actual before the one attached to the fdistribu chunk could be used)
+    # t_actual  = float(np.array(coords['absolute_time'])[0])
     timestep  = int(fdistribu[0].t)
+    t_actual = timestep * float(np.array(deltat[0]).reshape(-1)[0])
 
     cfg = get_measure_config()
 
@@ -232,3 +237,19 @@ def compute_diagnostics(fdistribu, time, mx, my, mvx, mvy):
 
 
 deisa.execute_callbacks()
+
+def _sort_diagnostics_files():
+    """Rewrite each diagnostics.csv sorted by iter (rows are appended in
+    task-completion order, which is not guaranteed to be time order)."""
+    for path in _INITIALIZED_DIAG_FILES:
+        with open(path, newline="") as fh:
+            reader = csv.DictReader(fh)
+            fieldnames = reader.fieldnames
+            rows = sorted(reader, key=lambda r: int(r["iter"]))
+        with open(path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+
+_sort_diagnostics_files()

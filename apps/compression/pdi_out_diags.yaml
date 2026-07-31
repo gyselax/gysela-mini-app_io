@@ -123,6 +123,11 @@ plugins:
                     'chunk_shape':    (1,),
                     'chunk_position': (0,),
                 },
+                'deltat': {
+                    'global_shape':   (1,),
+                    'chunk_shape':    (1,),
+                    'chunk_position': (0,),
+                },
                 'MeshX':  {'global_shape': (Nx,),  'chunk_shape': (Nx,),  'chunk_position': (0,)},
                 'MeshY':  {'global_shape': (Ny,),  'chunk_shape': (Ny,),  'chunk_position': (0,)},
                 'MeshVx': {'global_shape': (Nvx,), 'chunk_shape': (Nvx,), 'chunk_position': (0,)},
@@ -136,6 +141,7 @@ plugins:
           fdistribu: $fdistribu
           it: $iter
           t: $absolute_time
+          deltat: $deltat
           iter_offset: $iter_offset
           nbstep_diag: $nbstep_diag
           nb_step_compression: $nb_step_compression
@@ -147,7 +153,6 @@ plugins:
         exec: |
           timestep = int(it) + int(iter_offset)
 
-          t0_comp = time.time()
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
             if int(compression_mode) == 1:
@@ -169,26 +174,25 @@ plugins:
                     )
                   time.sleep(0.05)
               pdi.event("read_compressed_fdistribu")
-          t1_comp = time.time()
 
-          t0_diags = time.time()
           if timestep % int(nbstep_diag) == 0:
             bridge.send("fdistribu", fdistribu, timestep)
             if rank == 0:
               bridge.send("absolute_time", np.array([float(t)]), timestep)
+              bridge.send("deltat", np.array([float(deltat)]), timestep)
               bridge.send("MeshX",  np.array(MeshX),  timestep)
               bridge.send("MeshY",  np.array(MeshY),  timestep)
               bridge.send("MeshVx", np.array(MeshVx), timestep)
               bridge.send("MeshVy", np.array(MeshVy), timestep)
-          t1_diags = time.time()
           if timestep % 10 == 0:
             if rank == 0:
-              print(f"--------------------------timestep: {timestep} | compression : {t1_comp - t0_comp} | diagnostics : {t1_diags - t0_diags}")
+              print(f"--------------------------timestep: {timestep}")
       last_iteration:
         with:
           fdistribu: $fdistribu
           it: $iter
           t: $absolute_time
+          deltat: $deltat
           iter_offset: $iter_offset
           nb_step_compression: $nb_step_compression
           compression_mode: $compression_mode
@@ -224,6 +228,7 @@ plugins:
           bridge.send("fdistribu", fdistribu, timestep)
           if rank == 0:
             bridge.send("absolute_time", np.array([float(t)]), timestep)
+            bridge.send("deltat", np.array([float(deltat)]), timestep)
             bridge.send("MeshX",  np.array(MeshX),  timestep)
             bridge.send("MeshY",  np.array(MeshY),  timestep)
             bridge.send("MeshVx", np.array(MeshVx), timestep)

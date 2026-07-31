@@ -41,6 +41,7 @@ eval -- "$(
         ddc \
         gcc \
         ginkgo \
+        gmgpolar \
         googletest \
         kokkos \
         kokkos-fft \
@@ -64,6 +65,8 @@ eval -- "$(
         py-dask \
         py-dask-ml \
         py-deisa-dask \
+        py-deisa-ray \
+        py-iops-benchmark \
         py-h5py \
         py-imageio \
         py-matplotlib \

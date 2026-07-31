@@ -873,6 +873,7 @@ def assemble_global_field(
     local_models: list,
     local_bounds: list,
     query_points: jnp.ndarray,
+    chunk_size: int = _DEFAULT_RECON_CHUNK_SIZE,
 ) -> jnp.ndarray:
     """Reassemble a global field from per-rank local INRs by exact-domain dispatch.
 
@@ -893,6 +894,8 @@ def assemble_global_field(
         local_bounds: local_bounds[i] is rank i's physical bounding box
             (x_min, x_max, y_min, y_max, vx_min, vx_max, vy_min, vy_max).
         query_points: physical (x, y, vx, vy) points, shape (N, 4).
+        chunk_size: points per vmap call, to bound peak memory (query_points
+            can span the entire global grid).
 
     Returns:
         Array of shape (n_species, N).
@@ -928,7 +931,7 @@ def assemble_global_field(
         coords = jnp.stack([x_n, y_n, vx_n, vy_n], axis=-1)
 
         for isp in range(n_species):
-            pred = jax.vmap(local_models[irank][isp])(coords).squeeze(-1)
+            pred = _vmap_in_chunks(local_models[irank][isp], coords, chunk_size).squeeze(-1)
             out = out.at[isp].add(jnp.where(mask, pred, 0.0))
 
     return out

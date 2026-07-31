@@ -1,11 +1,5 @@
 add_executable(gys_compress gys_compress.cpp predcorr_compress.cpp)
 
-target_include_directories(gys_compress
-    PRIVATE
-        "${CMAKE_SOURCE_DIR}/src/external/gyselalibxx/simulations/geometryXYVxVy"
-        "${CMAKE_SOURCE_DIR}/src/external/gyselalibxx/simulations/geometryXVx"
-)
-
 target_link_libraries(gys_compress
     PUBLIC
         mini_app_io_lib

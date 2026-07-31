@@ -15,8 +15,6 @@
 #include <paraconf.h>
 #include <pdi.h>
 
-#include "spline_definitions_xyvxvy.hpp"
-
 #include "bsl_advection_vx.hpp"
 #include "bsl_advection_x.hpp"
 #include "chargedensitycalculator.hpp"
@@ -32,13 +30,12 @@
 #include "neumann_spline_quadrature.hpp"
 #include "output.hpp"
 #include "paraconfpp.hpp"
-#include "params.yaml.hpp"
-#include "pdi_out.yml.hpp"
 #include "predcorr_compress.hpp"
 #include "qnsolver.hpp"
 #include "singlemodeperturbinitialisation.hpp"
 #include "species_info.hpp"
 #include "species_init.hpp"
+#include "spline_definitions.hpp"
 
 using std::cerr;
 using std::cout;

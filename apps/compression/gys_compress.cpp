@@ -34,7 +34,7 @@
 #include "paraconfpp.hpp"
 #include "params.yaml.hpp"
 #include "pdi_out.yml.hpp"
-#include "predcorr.hpp"
+#include "predcorr_compress.hpp"
 #include "qnsolver.hpp"
 #include "singlemodeperturbinitialisation.hpp"
 #include "species_info.hpp"
@@ -118,10 +118,10 @@ void init_two_stream(
   DFieldXY perturbation = get_field(perturbation_alloc);
 
   double const inv_2pi = 1. / (2. * M_PI);
-  double const length_x =
-      ddcHelper::total_interval_length(ddc::select<GridX>(gridxy));
-  double const length_y =
-      ddcHelper::total_interval_length(ddc::select<GridY>(gridxy));
+  double const length_x = PCpp_double(conf_gyselax, ".SplineMesh.x_max") -
+                           PCpp_double(conf_gyselax, ".SplineMesh.x_min");
+  double const length_y = PCpp_double(conf_gyselax, ".SplineMesh.y_max") -
+                           PCpp_double(conf_gyselax, ".SplineMesh.y_min");
 
   ddc::host_for_each(idx_range_kinsp, [&](IdxSp const isp) {
     PC_tree_t const conf_isp = PCpp_get(conf_gyselax, ".SpeciesInfo[%d]", isp.uid());
@@ -134,6 +134,13 @@ void init_two_stream(
     double const ky = 0;
     // perturb_mode * 2. * M_PI / length_y;
 
+    if (isp.uid() == 0) {
+      int rank;
+      MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+      if (rank == 0) {
+        cout << "two_stream kx = " << kx << endl;
+      }
+    }
     ddc::parallel_for_each(
         Kokkos::DefaultExecutionSpace(),
         gridvxvy,
@@ -141,9 +148,9 @@ void init_two_stream(
           double const vx = ddc::coordinate(ddc::select<GridVx>(ivxvy));
           double const vy = ddc::coordinate(ddc::select<GridVy>(ivxvy));
           double const m1 = Kokkos::exp(
-              -((vx - v0) * (vx - v0) + (vy - v0) * (vy - v0)) / 2.);
+              -((vx - v0) * (vx - v0) + (vy ) * (vy )) / 2.);
           double const m2 = Kokkos::exp(
-              -((vx + v0) * (vx + v0) + (vy + v0) * (vy + v0)) / 2.);
+              -((vx + v0) * (vx + v0) + (vy ) * (vy )) / 2.);
           allfequilibrium_field(isp, ivxvy) = 0.5 * inv_2pi * (m1 + m2);
         });
 
@@ -386,7 +393,7 @@ int main(int argc, char **argv) {
   QNSolver const poisson(fft_poisson_solver, rhs);
 
   // Create predcorr operator
-  PredCorr const predcorr(vlasov, poisson);
+  PredCorrCompress const predcorr(vlasov, poisson);
 
   // Starting the code
   ddc::expose_to_pdi("Nx_spline_cells",

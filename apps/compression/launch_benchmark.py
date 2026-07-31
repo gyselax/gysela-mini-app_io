@@ -16,6 +16,7 @@ import csv
 # Compression params / names
 # ------------------------------------------------------------------
 from evaluate_compression import plot_diags, plot_final_snapshot_comparison
+from compression_methods.neural_network import AVAILABLE_INR_ARCHS
 
 
 GYS_COMPRESS_BIN = "./build/apps/compression/gys_compress"
@@ -210,7 +211,7 @@ def parse_args():
         type=str, 
         default="periodic_siren_deep_128",
         dest="arch_nn",
-        choices=["periodic_siren_deep_128", "periodic_fourier_mlp_deep_128"],
+        choices=AVAILABLE_INR_ARCHS,
         help="INR architecture (if --compression NN)"
     )
 

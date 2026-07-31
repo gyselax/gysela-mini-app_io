@@ -176,9 +176,8 @@ def _losses_function(model: eqx.Module, batch: tuple) -> dict:
     inputs, targets = batch
     predictions = jax.vmap(model)(inputs)
     mse = jnp.mean((predictions - targets) ** 2)
-    
     return {"total":mse}
-    
+
 # Compressor (offline)
 
 class NeuralNetworkCompressor(Compressor):
@@ -332,7 +331,7 @@ class NeuralNetworkCompressor(Compressor):
             loss_dict, model, adam_opt = adam_opt.update(model, batch)
             loss_val = float(loss_dict["total"])
             loss_history.append(loss_val)
-            
+
             if self.verbose and i % 100 == 0:
                  print(f"  [INR/{self.arch}][ADAM/{tag}] iter {i:4d} - loss: {loss_val:.2e}")
             if loss_val < self.threshold:
@@ -342,6 +341,7 @@ class NeuralNetworkCompressor(Compressor):
         #Phase 2: L-BFGS, full-batch
         full_batch = (inputs, targets)
         lbfgs_opt = ScimbaLBfgs(model, _losses_function)
+        best_model, best_loss = model, float("inf")
         pbar = _training_progress(self.lbfgs_iters, f"[INR/{self.arch}][L-BFGS]", self.verbose)
         for i in pbar:
             loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)

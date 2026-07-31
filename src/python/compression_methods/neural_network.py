@@ -176,9 +176,23 @@ def _losses_function(model: eqx.Module, batch: tuple) -> dict:
     inputs, targets = batch
     predictions = jax.vmap(model)(inputs)
     mse = jnp.mean((predictions - targets) ** 2)
-    
+
     return {"total":mse}
-    
+
+# Reconstruction: unlike training, this always evaluates the *entire* grid, so
+# (unlike batch_size, which only bounds training mini-batches) it needs its own
+# chunking to keep peak memory bounded.
+_DEFAULT_RECON_CHUNK_SIZE = 50_000
+
+
+def _vmap_in_chunks(model: eqx.Module, inputs: jnp.ndarray, chunk_size: int) -> jnp.ndarray:
+    """jax.vmap(model) over inputs in chunks of chunk_size, concatenated back together."""
+    total = inputs.shape[0]
+    chunk_size = min(chunk_size, total)
+    outputs = [jax.vmap(model)(inputs[i:i + chunk_size]) for i in range(0, total, chunk_size)]
+    return jnp.concatenate(outputs, axis=0)
+
+
 # Compressor (offline)
 
 class NeuralNetworkCompressor(Compressor):
@@ -403,7 +417,7 @@ class NeuralNetworkCompressor(Compressor):
         
         species_out = []
         for model in models:
-            pred = jax.vmap(model)(inputs).reshape(nx, ny, nvx, nvy)
+            pred = _vmap_in_chunks(model, inputs, self.batch_size).reshape(nx, ny, nvx, nvy)
             species_out.append(pred)
             
         return jnp.stack(species_out)
@@ -624,7 +638,11 @@ class OnlineNeuralNetworkCompressor:
             final_losses.append(loss_val)
         t1 = time.perf_counter()
 
-        recon_species = [jax.vmap(self.models[isp])(inputs).reshape(nx, ny, nvx, nvy) for isp in range(n_species)]
+        recon_chunk_size = self.batch_size or _DEFAULT_RECON_CHUNK_SIZE
+        recon_species = [
+            _vmap_in_chunks(self.models[isp], inputs, recon_chunk_size).reshape(nx, ny, nvx, nvy)
+            for isp in range(n_species)
+        ]
         approx = jnp.stack(recon_species)
         t2 = time.perf_counter()
 

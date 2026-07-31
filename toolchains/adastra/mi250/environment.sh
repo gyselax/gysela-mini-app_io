@@ -62,7 +62,7 @@ eval -- "$(
         py-dask-ml \
         py-deisa-dask \
         py-deisa-ray \
-        py-iops-benchopt \
+        py-iops-benchmark \
         py-h5py \
         py-imageio \
         py-matplotlib \

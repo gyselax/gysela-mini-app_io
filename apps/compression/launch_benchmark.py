@@ -406,6 +406,13 @@ def load_deisa_env():
     return json.loads(result.stdout)
 
 
+def _node_launch_prefix(node):
+    """srun prefix to run a single process on a specific node, or [] to just run locally."""
+    if node is None:
+        return []
+    return ["srun", "-w", node, "-N", "1", "--ntasks-per-node", "1", "--overlap"]
+
+
 def start_dask(deisa_env, work_dir, n_workers=1):
     """Start the Dask scheduler and worker(s), each on their own dedicated node on
     Adastra (else locally). Returns (sch_proc, worker_proc, updated_env).

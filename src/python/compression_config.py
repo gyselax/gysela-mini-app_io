@@ -10,7 +10,7 @@ from compression_methods.neural_network import NeuralNetworkCompressor, OnlineNe
 
 OFFLINE_COMPRESSOR_CLASS = PCACompressor
 OFFLINE_COMPRESSOR_PARAMS = {
-    "n_components": 2,
+    "n_components": 8,
     "normalisation": "none",
     "clip_nonnegative": False,
 }
@@ -28,22 +28,7 @@ ONLINE_COMPRESSOR_CLASS = RandomNoiseCompressor
 ONLINE_COMPRESSOR_PARAMS = {
    "relative_noise_level": 0.01,
 }
-"""
 
-ONLINE_COMPRESSOR_CLASS = OnlineNeuralNetworkCompressor
-ONLINE_COMPRESSOR_PARAMS = {
-    "arch": "periodic_siren_deep_128",
-    "lr": 1e-4,
-    "warm_iters_adam": 5000,
-    "warm_iters_lbfgs": 100,
-    "refine_iters_adam": 500,
-    "refine_iters_lbfgs": 10,
-    #"batch_size": 2000,
-    "verbose": True,
-    "debug_plot": True,
-}
-
-"""
 ONLINE_COMPRESSOR_CLASS = OnlineNeuralNetworkCompressor
 ONLINE_COMPRESSOR_PARAMS = {
     "arch": "periodic_siren_deep_128",

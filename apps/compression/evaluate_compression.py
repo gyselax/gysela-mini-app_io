@@ -4,7 +4,6 @@ import glob
 import os
 from pathlib import Path
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +12,8 @@ from matplotlib.patches import Rectangle
 from compression_methods.neural_network import (
     AVAILABLE_INR_ARCHS,
     OnlineNeuralNetworkCompressor,
+    _DEFAULT_RECON_CHUNK_SIZE,
+    _vmap_in_chunks,
     assemble_global_field,
     continue_training_offline,
     load_online_params,
@@ -912,7 +913,7 @@ def evaluate_rank(data_dir, it, rank, species=0):
     model = payload["models"][species]
     nx, ny, nvx, nvy = payload["local_shape"]
     inputs = OnlineNeuralNetworkCompressor._build_local_inputs(nx, ny, nvx, nvy)
-    recon = np.asarray(jax.vmap(model)(inputs)).reshape(nx, ny, nvx, nvy)
+    recon = np.asarray(_vmap_in_chunks(model, inputs, _DEFAULT_RECON_CHUNK_SIZE)).reshape(nx, ny, nvx, nvy)
     target = payload["target"][species]
     plt.figure()
     plt.pcolormesh(target[:,16,:, 16])

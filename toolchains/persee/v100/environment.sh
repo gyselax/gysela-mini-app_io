@@ -35,3 +35,10 @@ export OMP_NUM_THREADS=8
 export LD_LIBRARY_PATH="$(spack location -i kokkos-tools)/lib64:$LD_LIBRARY_PATH"
 
 export PYTHONPATH=/data/gyselarunner/gysela-io-env-deisa-cuda/.spack-env/view/lib/python3.13/site-packages:${PYTHONPATH:-}
+
+# Every MPI rank embeds its own Python/JAX runtime (via PDI's pycall plugin),
+# and JAX's default behavior is to preallocate ~75% of GPU memory on first
+# use, per process. With several ranks sharing one GPU on this node, that
+# alone exhausts the device before any compression work starts. Switch JAX to
+# on-demand allocation instead.
+export XLA_PYTHON_CLIENT_PREALLOCATE=false

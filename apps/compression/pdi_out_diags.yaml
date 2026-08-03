@@ -143,6 +143,7 @@ plugins:
           t: $absolute_time
           deltat: $deltat
           iter_offset: $iter_offset
+          deltat: $deltat
           nbstep_diag: $nbstep_diag
           nb_step_compression: $nb_step_compression
           compression_mode: $compression_mode
@@ -150,13 +151,22 @@ plugins:
           MeshY: $MeshY
           MeshVx: $MeshVx
           MeshVy: $MeshVy
+          local_fdistribu_starts: $local_fdistribu_starts
         exec: |
           timestep = int(it) + int(iter_offset)
 
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
             if int(compression_mode) == 1:
-              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+              starts = np.asarray(local_fdistribu_starts).astype(int)
+              nx_l, ny_l, nvx_l, nvy_l = fdistribu.shape[1:]
+              local_bounds = (
+                float(MeshX[starts[1]]), float(MeshX[starts[1] + nx_l - 1]),
+                float(MeshY[starts[2]]), float(MeshY[starts[2] + ny_l - 1]),
+                float(MeshVx[starts[3]]), float(MeshVx[starts[3] + nvx_l - 1]),
+                float(MeshVy[starts[4]]), float(MeshVy[starts[4] + nvy_l - 1]),
+              )
+              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank(), local_bounds=local_bounds)
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
@@ -194,19 +204,29 @@ plugins:
           t: $absolute_time
           deltat: $deltat
           iter_offset: $iter_offset
+          deltat: $deltat
           nb_step_compression: $nb_step_compression
           compression_mode: $compression_mode
           MeshX: $MeshX
           MeshY: $MeshY
           MeshVx: $MeshVx
           MeshVy: $MeshVy
+          local_fdistribu_starts: $local_fdistribu_starts
         exec: |
           timestep = int(it) + int(iter_offset)
 
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
             if int(compression_mode) == 1:
-              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
+              starts = np.asarray(local_fdistribu_starts).astype(int)
+              nx_l, ny_l, nvx_l, nvy_l = fdistribu.shape[1:]
+              local_bounds = (
+                float(MeshX[starts[1]]), float(MeshX[starts[1] + nx_l - 1]),
+                float(MeshY[starts[2]]), float(MeshY[starts[2] + ny_l - 1]),
+                float(MeshVx[starts[3]]), float(MeshVx[starts[3] + nvx_l - 1]),
+                float(MeshVy[starts[4]]), float(MeshVy[starts[4] + nvy_l - 1]),
+              )
+              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank(), local_bounds=local_bounds)
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)

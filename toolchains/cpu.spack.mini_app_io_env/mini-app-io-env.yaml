@@ -33,7 +33,7 @@ spack:
     - py-sympy@1.13
     - py-xarray@2024.7
     - py-bokeh
-    - py-deisa-dask@0.5
+    - py-deisa-dask@0.6.2
   specs:
   - matrix:
     - [$optional_packages]

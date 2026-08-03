@@ -37,14 +37,14 @@ class GridConfig:
     ky: object = field(init=False)
 
     def __post_init__(self):
-        Nx = np.asarray(self.x).size
-        Ny = np.asarray(self.y).size
-        self.kx = 2.0 * np.pi * np.fft.fftfreq(Nx, d=self.dx)
-        self.ky = 2.0 * np.pi * np.fft.fftfreq(Ny, d=self.dy)
+        Nx = da.asarray(self.x).size
+        Ny = da.asarray(self.y).size
+        self.kx = 2.0 * da.pi * da.fft.fftfreq(Nx, d=self.dx)
+        self.ky = 2.0 * da.pi * da.fft.fftfreq(Ny, d=self.dy)
 
     @staticmethod
     def spacing(coord):
-        values = np.asarray(coord)
+        values = da.asarray(coord)
         if values.size < 2:
             raise ValueError(
                 "Young Padawan, a single point doth not a grid make. "
@@ -83,10 +83,6 @@ class Config:
     grid:  GridConfig
 
 
-def to_dask(array):
-    return array if isinstance(array, da.Array) else da.from_array(array, name=False)
-
-
 def init_measure_config(x, y, vx, vy, data_dir="."):
     global _MEASURE_CFG
     _MEASURE_CFG = Config(PathsConfig(Path(data_dir)), GridConfig(x, y, vx, vy))
@@ -104,8 +100,7 @@ def get_measure_config():
 
 def density(fdistribu, grid):
     """Integrate f over all species and velocity dimensions -> n(x, y)."""
-    f_da = to_dask(fdistribu)
-    return da.sum(f_da, axis=(0, 3, 4)) * grid.dvx * grid.dvy
+    return da.sum(fdistribu, axis=(0, 3, 4)) * grid.dvx * grid.dvy
 
 
 def poisson_fft(n, grid):
@@ -114,16 +109,16 @@ def poisson_fft(n, grid):
     In Fourier space: -(kx^2 + ky^2) * phi_hat(k) = rho_hat(k)
     phi_hat(0,0) = 0  (gauge condition)
     """
-    rho_hat = da.fft.fft2(to_dask(n) - 1.0)
+    rho_hat = da.fft.fft2(n - 1.0)
 
-    KX, KY = np.meshgrid(grid.kx, grid.ky, indexing="ij")
+    KX, KY = da.meshgrid(grid.kx, grid.ky, indexing="ij")
     k2 = KX ** 2 + KY ** 2
     k2[0, 0] = 1.0              # avoid /0; DC mode zeroed by mask below
 
-    mask = np.ones_like(k2)
+    mask = da.ones_like(k2)
     mask[0, 0] = 0.0            # gauge: phi_hat(0,0) = 0
 
-    phi_hat = rho_hat / to_dask(k2) * to_dask(mask)
+    phi_hat = rho_hat / k2 * mask
     return da.real(da.fft.ifft2(phi_hat))
 
 
@@ -135,15 +130,15 @@ def electric_field_from_potential(phi, grid):
       E_hat_y(k) = -1j * ky * phi_hat(k)
     Returns array of shape (Nx, Ny, 2).
     """
-    phi_hat = da.fft.fft2(to_dask(phi))
-    KX, KY = np.meshgrid(grid.kx, grid.ky, indexing="ij")
-    Ex = da.real(da.fft.ifft2(-1j * to_dask(KX) * phi_hat))
-    Ey = da.real(da.fft.ifft2(-1j * to_dask(KY) * phi_hat))
+    phi_hat = da.fft.fft2(phi)
+    KX, KY = da.meshgrid(grid.kx, grid.ky, indexing="ij")
+    Ex = da.real(da.fft.ifft2(-1j * KX * phi_hat))
+    Ey = da.real(da.fft.ifft2(-1j * KY * phi_hat))
     return da.stack([Ex, Ey], axis=-1)
 
 
 def electric_field_energy(Efield, grid):
-    return 0.5 * da.sum(to_dask(Efield) ** 2) * grid.dV_2D
+    return 0.5 * da.sum(Efield ** 2) * grid.dV_2D
 
 _INITIALIZED_DIAG_FILES = set()
 
@@ -153,24 +148,31 @@ def measure(cfg, f, Efield, it, t_actual):
     data_dir.mkdir(parents=True, exist_ok=True)
     diag_file_path = data_dir / "diagnostics.csv"
 
-    f_da = to_dask(f)
-    if f_da.ndim != 4:
+    if f.ndim != 4:
         raise ValueError(
             f"Padawan, the electric force is not with you -- "
-            f"f must have 4 dimensions, not {f_da.ndim}."
+            f"f must have 4 dimensions, not {f.ndim}."
         )
 
     grid  = cfg.grid
-    vx_bc = to_dask(grid.vx)[(None, None, slice(None), None)]
-    vy_bc = to_dask(grid.vy)[(None, None, None, slice(None))]
+    vx_bc = grid.vx[(None, None, slice(None), None)]
+    vy_bc = grid.vy[(None, None, None, slice(None))]
     v2    = vx_bc ** 2 + vy_bc ** 2
 
-    epot       = float(electric_field_energy(Efield, grid).compute())
-    ekin       = float((0.5 * da.sum(f_da * v2) * grid.dV_4D).compute())
-    l2norm_sq  = float((da.sum(f_da ** 2) * grid.dV_4D).compute())
-    mass       = float((da.sum(f_da) * grid.dV_4D).compute())
-    momentum_x = float((da.sum(f_da * vx_bc) * grid.dV_4D).compute())
-    momentum_y = float((da.sum(f_da * vy_bc) * grid.dV_4D).compute())
+    epot       = electric_field_energy(Efield, grid)
+    ekin       = 0.5 * da.sum(f * v2) * grid.dV_4D
+    l2norm_sq  = da.sum(f ** 2) * grid.dV_4D
+    mass       = da.sum(f) * grid.dV_4D
+    momentum_x = da.sum(f * vx_bc) * grid.dV_4D
+    momentum_y = da.sum(f * vy_bc) * grid.dV_4D
+
+    client = get_client()
+    futures = client.compute([
+        epot, ekin, l2norm_sq, mass, momentum_x, momentum_y
+    ])
+    epot, ekin, l2norm_sq, mass, momentum_x, momentum_y = map(
+        float, deisa.client.gather(futures)
+    )
 
     data = {
         "iter":       it,
@@ -179,9 +181,9 @@ def measure(cfg, f, Efield, it, t_actual):
         "ekin":       ekin,
         "epot":       epot,
         "etot":       ekin + epot,
-        "l2norm":     float(np.sqrt(l2norm_sq)),
+        "l2norm":     float(da.sqrt(l2norm_sq)),
         "mass":       mass,
-        "momentum":   float(np.hypot(momentum_x, momentum_y)),
+        "momentum":   float(da.hypot(momentum_x, momentum_y)),
         "momentum_x": momentum_x,
         "momentum_y": momentum_y,
     }
@@ -211,36 +213,34 @@ def compute_offline_compression(fdistribu_chunks):
 
     deisa.set("fdistribu_offline_done", True, timestep=timestep)
 
-@deisa.register("fdistribu")
-def compute_diagnostics(fdistribu_chunks):
-    client = get_client()
-    coords = client.gather(client.get_dataset("coords"))
+
+@deisa.register("fdistribu", "absolute_time", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
+def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
 
     if _MEASURE_CFG is None:
         init_measure_config(
-            x  = np.array(coords['MeshX']),
-            y  = np.array(coords['MeshY']),
-            vx = np.array(coords['MeshVx']),
-            vy = np.array(coords['MeshVy']),
+            x  = mx[0],
+            y  = my[0],
+            vx = mvx[0],
+            vy = mvy[0],
         )
 
-    fdistribu = np.array(fdistribu_chunks[0])  # (Nsp, Nx, Ny, Nvx, Nvy)
-    timestep  = int(fdistribu_chunks[0].t)
-    # deltat is constant, unlike coords['absolute_time'] (overwritten every iteration and
-    # racy when the sim outruns the diagnostics worker, e.g. on persee).
-    t_actual  = timestep * float(coords['deltat'])
+    # This avoids a race condition conflict on persee (sim runs faster then the diagnostics
+    # and republishes t_actual before the one attached to the fdistribu chunk could be used)
+    timestep  = int(fdistribu[0].t)
+    t_actual = timestep * float(deltat[0][0].compute())
 
     cfg = get_measure_config()
 
-    n      = density(fdistribu, cfg.grid)
+    n      = density(fdistribu[0], cfg.grid)
     phi    = poisson_fft(n, cfg.grid)
     Efield = electric_field_from_potential(phi, cfg.grid)
 
-    Nsp = fdistribu.shape[0]
+    Nsp = fdistribu[0].shape[0]
     for isp in range(Nsp):
         data_dir = cfg.paths.data_dir if Nsp == 1 else cfg.paths.data_dir / f"species_{isp}"
         sp_cfg = Config(paths=PathsConfig(data_dir), grid=cfg.grid)
-        measure(sp_cfg, fdistribu[isp], Efield, timestep, t_actual)
+        measure(sp_cfg, fdistribu[0][isp], Efield, timestep, t_actual)
 
 
 deisa.execute_callbacks()

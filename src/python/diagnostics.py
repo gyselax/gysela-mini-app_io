@@ -226,7 +226,8 @@ def compute_diagnostics(fdistribu_chunks):
 
     fdistribu = np.array(fdistribu_chunks[0])  # (Nsp, Nx, Ny, Nvx, Nvy)
     timestep  = int(fdistribu_chunks[0].t)
-    # deltat is constant, unlike coords['absolute_time'] (overwritten every iteration).
+    # deltat is constant, unlike coords['absolute_time'] (overwritten every iteration and
+    # racy when the sim outruns the diagnostics worker, e.g. on persee).
     t_actual  = timestep * float(coords['deltat'])
 
     cfg = get_measure_config()

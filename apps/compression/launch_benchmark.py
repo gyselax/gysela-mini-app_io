@@ -407,7 +407,8 @@ def load_deisa_env():
 
 
 def start_dask(deisa_env, work_dir, n_workers=1):
-    """Start Dask scheduler and workers. Returns (sch_proc, worker_proc, updated_env).
+    """Start the Dask scheduler and worker(s), each on their own dedicated node on
+    Adastra (else locally). Returns (sch_proc, worker_proc, updated_env).
 
     The scheduler file lives inside work_dir (rather than a fixed repo-wide
     path) so that concurrent launch_benchmark.py runs against different
@@ -417,6 +418,8 @@ def start_dask(deisa_env, work_dir, n_workers=1):
     schefile = os.path.join(work_dir, "scheduler.json")
     if os.path.exists(schefile):
         os.remove(schefile)
+
+    scheduler_node, worker_node, _ = resolve_role_nodes()
 
     sch_proc = subprocess.Popen(
         [

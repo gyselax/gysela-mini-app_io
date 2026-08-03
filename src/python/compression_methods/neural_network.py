@@ -319,6 +319,8 @@ class NeuralNetworkCompressor(Compressor):
         loss_history = []
         tag = "warm" if is_warm else "cold"
         
+        best_model, best_loss = model, float("inf")
+
         #Phase 1: ADAM, mini-batches
         adam_opt = ScimbaAdam(model, _losses_function, learning_rate=self.lr)
         pbar = _training_progress(self.max_iters, f"[INR/{self.arch}][ADAM]", self.verbose)

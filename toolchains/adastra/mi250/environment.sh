@@ -11,7 +11,7 @@ module purge
 
 SPACK_USER_VERSION="spack-user-5.0.0"
 
-export SPACK_USER_PREFIX="/lus/work/CT5/gen2224/SHARED/gysela-mini-app-GENOA"
+export SPACK_USER_PREFIX="/lus/work/CT5/gen2224/SHARED/gysela-mini-app-MI250"
 export SPACK_USER_CACHE_PATH="${SPACK_USER_PREFIX}/cache"
 
 export SPACK_USER_CONFIG_PATH="${ALL_CCFRWORK}/gyselalibxx-spack-install-py314-genoa/configuration"

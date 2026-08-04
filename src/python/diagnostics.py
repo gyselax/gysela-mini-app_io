@@ -1,5 +1,6 @@
 """In-situ diagnostics: conserved-variable calculations and deisa analytics callback."""
 
+import time
 import csv
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,9 +9,13 @@ import dask.array as da
 import numpy as np
 from deisa.dask import Deisa
 from distributed import get_client
+from distributed.diagnostics import MemorySampler
 
 import compression_diagnostics
 import reduced_diagnostics
+
+import pandas as pd
+import matplotlib.pyplot as plt
 
 _MEASURE_CFG = None
 
@@ -249,7 +254,43 @@ def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
         measure(sp_cfg, fdistribu[0][isp], Efield, timestep, t_actual)
 
 
-deisa.execute_callbacks()
+samplers = {
+    "all_callbacks": MemorySampler(),
+    "spilled_memory": MemorySampler(),
+}
+
+with (
+    samplers["all_callbacks"].sample("all_callbacks"),
+    samplers["spilled_memory"].sample("spilled_memory", measure="spilled"),
+):
+    t0 = time.time()
+    
+    deisa.execute_callbacks()
+
+    print("Time analytics:", time.time() - t0, flush=True)
+
+# Save plots
+plots = {
+    "all_callbacks": "mem_consumption_analytics.png",
+    "spilled_memory": "spilled_mem_analytics.png",
+}
+for name, filename in plots.items():
+    samplers[name].plot()
+    plt.savefig(filename)
+    plt.clf()
+
+# Save raw samples
+csv_files = {
+    "all_callbacks": "memory_samples.csv",
+    "spilled_memory": "memory_spilled_samples.csv",
+}
+for name, filename in csv_files.items():
+    df = pd.DataFrame(
+        samplers[name].samples[name],
+        columns=["time", "memory"],
+    )
+    df.to_csv(filename, index=False)
+
 
 def _sort_diagnostics_files():
     """Rewrite each diagnostics.csv sorted by iter (rows are appended in

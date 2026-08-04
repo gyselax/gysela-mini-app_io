@@ -1,0 +1,604 @@
+benchmark:
+  name: "ISAV 2026"
+  workdir: "./"
+  repetitions: 1
+  search_method: "exhaustive"
+  executor: "local"
+  cache_file: "./iops_gys.db"
+  cache_exclude_vars: ["gys_compress_output"]
+
+vars:
+  #pfs_path:
+  #  type: str
+  #  sweep:
+  #    mode: list
+  #    values: ["{{ execution_dir }}/gys_compress_path/"]
+
+  gys_compress_output:
+    type: str
+    expr: "{{ execution_dir }}/slurm.log"
+
+  schefile:
+    type: str
+    expr: "{{ execution_dir }}/scheduler.json"
+
+  diag_mode:
+    type: int
+    sweep:
+      mode: list
+      values: [0, 1, 2]
+
+  deisa_version:
+    type: str
+    sweep:
+      mode: list
+      values: ["dask"] #, "ray"]
+    when: "diag_mode == 1"
+    default: "none"
+
+  pdi_yaml:
+    type: str
+    expr: >-
+      {% if diag_mode == 0 %}pdi_out.yaml{% elif deisa_version == "ray" %}pdi_out_diags_ray.yaml{% else %}pdi_out_diags.yaml{% endif %}
+    #sweep:
+    #mode: list
+    #values: ["pdi_out.yaml"]
+    #when: "diag_mode == 0"
+    #default: "pdi_out_diags.yaml"
+  
+  grid_index:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2, 3, 4, 5, 6]
+
+  nb_workers:
+    type: int
+    expr: >-
+      {% if deisa_version == 'dask' %}{{ 1 }}{% else %}0{% endif %}
+
+    #{% if deisa_version == 'dask' %}{{[1, 1, 1, 1, 1, 1, 1][grid_index]}}{% else %}0{% endif %}
+
+
+  mpi_ranks:
+    type: int
+    expr: "{{[8, 8, 16, 64, 128, 512, 1024][grid_index]}}"
+
+  ranks_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [8] # or 2 ?
+
+  nodes:
+    type: int
+    expr: >-
+      {% if diag_mode == 1 %}{{ mpi_ranks // ranks_per_node + nb_workers + 1 }}{% else %}{{ mpi_ranks // ranks_per_node }}{% endif %}
+
+  tasks_per_nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [8]
+
+  x_ncells:
+    type: int
+    expr: "{{[32, 256, 256, 256, 256, 256, 256][grid_index]}}"
+
+  y_ncells:
+    type: int
+    expr: "{{[32, 256, 256, 256, 512, 512, 512][grid_index]}}"
+
+  vx_ncells:
+    type: int
+    expr: "{{[47, 255, 255, 511, 511, 511, 1023][grid_index]}}"
+
+  vy_ncells:
+    type: int
+    expr: "{{[47, 255, 511, 511, 511, 1023, 1023][grid_index]}}"
+
+  nbiter:
+    type: int
+    sweep:
+      mode: list
+      values: [100]
+
+  compression_period:
+    type: int
+    sweep:
+      mode: list
+      values: [10]
+
+  nbiter_diag:
+    type: int
+    sweep:
+      mode: list
+      values: [2]
+
+command:
+  template: "dask worker"
+
+scripts:
+  - name: "gys_compress_IOPS_benchmark"
+    inputs:
+      - name: "gys_compress_config"
+        path: "{{ execution_dir }}/gys_compress.yaml"
+        template: |
+          Input:
+            case: landau_damping #landau_damping
+            fdistribu_filename: "none"
+            nb_restart: 0
+            iter_offset: 0
+
+          SplineMesh:
+            x_min: 0.0
+            x_max: 12.56637061435917
+            x_ncells: {{ x_ncells }}
+            y_min: 0.0
+            y_max: 12.56637061435917
+            y_ncells : {{ y_ncells }}
+            vx_min: -6.0
+            vx_max: +6.0
+            vx_ncells: {{ vx_ncells }}
+            vy_min: -6.0
+            vy_max: +6.0
+            vy_ncells: {{ vy_ncells }}
+
+          SpeciesInfo:
+          - charge: -1.
+            mass: 0.0005
+            density_eq: 1.
+            temperature_eq: 1.
+            mean_velocity_eq: 0.
+            perturb_amplitude: 0.05
+            perturb_mode: 1
+
+          Algorithm:
+            deltat: 0.25
+            nbiter: {{ nbiter }}
+
+          CompressionBenchmark:
+            compression_period: {{ compression_period }}
+
+          Output:
+            nbiter_diag: {{ nbiter_diag }}  # diagnostics every N timesteps (must divide compression_period)
+
+    script_template: |
+      mpirun {{ command.template }} >> {{ gys_compress_output }} >&1
+
+    parser:
+      file: "{{ gys_compress_output }}"
+      metrics:
+        - name: time_pycall
+          type: float
+        - name: time_simulation_init
+          type: float
+        - name: time_bridge_init
+          type: float
+        - name: time_full_simulation
+          type: float
+        - name: time_analytics
+          type: float
+        - name: time_post_hoc
+          type: float
+        - name: time_write
+          type: float
+        - name: time_total
+          type: float
+      parser_script: |
+        import json
+        import os
+        import re
+        def _folder_size(path):
+          total = 0
+          for root, _dirs, files in os.walk(path):
+            for name in files:
+              fp = os.path.join(root, name)
+              if os.path.isfile(fp):
+                total += os.path.getsize(fp)
+          return total
+        
+        def parse(file_path):
+          with open(file_path, "r") as f:
+            lines = f.readlines()
+            time_pycall = None
+            time_simulation_init = None
+            time_bridge_init = None
+            time_full_simulation = None
+            time_analytics = None
+            time_post_hoc = None
+            time_write = None
+            time_total = None
+            for line in lines:
+              if "Time pycall:" in line:
+                time_pycall = float(line.split("Time pycall:")[1].strip().rstrip('s'))
+              elif "Time Simulation initialisation:" in line:
+                time_simulation_init = float(line.split("Time Simulation initialisation:")[1].strip().rstrip('s'))
+              elif "Time Bridge initialisation:" in line:
+                time_bridge_init = float(line.split("Time Bridge initialisation:")[1].strip().rstrip('s'))
+              elif "Time full simulation:" in line:
+                time_full_simulation = float(line.split("Time full simulation:")[1].strip().rstrip('s'))
+              elif "Time analytics:" in line:
+                time_analytics = float(line.split("Time analytics:")[1].strip().rstrip('s'))
+              elif "Time post-hoc diagnostics:" in line:
+                time_post_hoc = float(line.split("Time post-hoc analytics:")[1].strip().rstrip('s'))
+              elif "Time write:" in line:
+                time_write = float(line.split("Time write:")[1].strip().rstrip('s'))
+              elif "Time total:" in line:
+                time_total = float(line.split("Time total:")[1].strip().rstrip('s'))
+
+            return {
+              "time_pycall": time_pycall,
+              "time_simulation_init": time_simulation_init,
+              "time_bridge_init": time_bridge_init,
+              "time_full_simulation": time_full_simulation,
+              "time_analytics": time_analytics,
+              "time_post_hoc": time_post_hoc,
+              "time_write": time_write,
+              "time_total": time_total,
+            }
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results_gys_compress.csv"
+
+machines:
+  adastra-genoa:
+    benchmark:
+      repetitions: 1
+      parallel: 50
+      executor: "slurm"
+    vars:
+      threads_per_node:
+        type: int
+        expr: "384"
+      threads_per_rank:
+        type: int
+        expr: "{{ threads_per_node // ranks_per_node }}"
+    scripts:
+      - name: "gys_compress_IOPS_benchmark"
+        script_template: |
+          #!/bin/bash
+          #SBATCH --job-name=gys_compress
+          #SBATCH --output=slurm.log
+          #SBATCH --nodes={{ nodes  }}
+          #SBATCH --ntasks-per-node={{ tasks_per_nodes }}
+          #SBATCH --time=4:00:00
+          #SBATCH --constraint="GENOA"
+          #SBATCH --account=cad17895
+          #SBATCH --exclusive
+
+          set -e
+          set -o pipefail
+
+          BASE_DIR=/lus/home/CT6/cad17895/ilucas/gysela-mini-app_io 
+
+          source $BASE_DIR/toolchains/adastra/genoa/environment.sh
+          source $BASE_DIR/.gys_env/bin/activate
+
+          unset LUA_PATH LUA_CPATH
+          
+          export OMP_DISPLAY_AFFINITY=true
+          export OMP_PROC_BIND=close
+          export OMP_PLACES=threads
+          export OMP_NUM_THREADS={{ threads_per_rank }}
+
+          export GYS_DIAG_MODE={{ diag_mode }}
+
+          {% if diag_mode == 1 and deisa_version == 'dask' %}
+          srun -l -N 1 -n 1 --cpus-per-task={{ threads_per_node }} \
+            --threads-per-core=2 -r 0 \
+            dask scheduler --scheduler-file={{ schefile }} &
+
+          while ! [ -f {{ schefile }} ]; do
+            sleep 1
+            echo -n .
+          done 
+          
+          export DEISA_DASK_SCHEDULER_ADDRESS=$(jq -r '.["address"]' {{ schefile }})
+
+          echo "Launch ${DASK_WORKERS} dask worker(s)"
+          srun -l -N {{ nb_workers }} -n {{ nb_workers }} \
+            --cpus-per-task={{ threads_per_node }} \
+            --threads-per-core=2 -r 1 \
+            dask worker --nworkers 1 --local-directory /tmp  \
+            --scheduler-file={{ schefile }} &
+          sleep 10
+
+          echo "Launch analytics"
+          python3 $BASE_DIR/src/python/diagnostics_ray.py &
+          analytics_pid=$!
+
+          REL={{ 1 + nb_workers }}
+          SIMU_NODES={{ nodes - nb_workers  - 1 }}
+          SIMU_RANKS=$(( SIMU_NODES * {{ ranks_per_node }} ))
+          {% elif diag_mode == 1 and deisa_version == 'ray' %}
+
+          NODES=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+          HEAD_NODE=$(echo "$NODES" | head -n 1)
+          WORKER_NODE=$(echo "$NODES" | tail -n 1)
+
+          HEAD_NODE_IP=$(srun -N 1 -n 1 -r 0  hostname --ip-address)
+          #HEAD_NODE_IP=$(srun -N 1 -n 1 -w $HEAD_NODE  hostname --ip-address)
+
+          PORT=4242
+          HEAD_ADDRESS=${HEAD_NODE_IP}:$PORT
+
+          export DEISA_RAY_ADDRESS="${HEAD_ADDRESS}"
+
+          #srun -N 1 -n 1 -w $HEAD_NODE ray start --head --port=$PORT --block &
+          srun -l -N 1 -n 1 --cpus-per-task={{ threads_per_node }} \
+            --threads-per-core=2 -r 0 \
+            ray start -v --head --port=$PORT --block &
+          echo "Head node started at address $HEAD_ADDRESS"
+          sleep 10
+
+          REL=1
+          SIMU_NODES={{ nodes - 1}}
+          SIMU_RANKS=$(( SIMU_NODES * {{ ranks_per_node - 1 }} ))
+
+          echo "Launch workers"
+          #srun -N 1 -n 1 -w $WORKER_NODE ray start --address ${HEAD_ADDRESS} --block &
+          srun -l -N $SIMU_NODES -n $SIMU_NODES\
+            --cpus-per-task={{ threads_per_rank }} \
+            --threads-per-core=2 -r 1 --overlap \
+            numactl --cpunodebind=7 --membind=7 \
+            ray start -v --address ${HEAD_ADDRESS} --block &
+          sleep 10
+
+          echo "Launch analytics"
+          python3 $BASE_DIR/src/python/diagnostics_ray.py &
+          analytics_pid=$!
+
+          {% else %}
+          REL=0
+          SIMU_NODES={{ nodes }}
+          SIMU_RANKS=$(( SIMU_NODES * {{ ranks_per_node }} ))
+          {% endif %}
+
+          echo "Launch simu on $SIMU_NODES nodes ({{ ranks_per_node }} \
+                ranks/node, $SIMU_RANKS ranks total)"
+          srun -l -N $SIMU_NODES -n $SIMU_RANKS --cpus-per-task={{ threads_per_rank }} \
+            --threads-per-core=2 --cpu-bind=ldoms -r ${REL} \
+            $BASE_DIR/build/apps/compression/gys_compress \
+            {{ execution_dir }}/gys_compress.yaml \
+            $BASE_DIR/apps/compression/{{ pdi_yaml }} &
+          simu_pid=$!
+
+          {% if diag_mode == 1 %}
+          wait ${analytics_pid}
+          echo "Analytics over"
+          {% endif %}
+          wait ${simu_pid}
+          echo "Simulation over"
+
+          {% if diag_mode == 2 %}
+          python3 $BASE_DIR/src/python/finalize_reduced_diagnostics.py \
+            {{ execution_dir }}/gys_compress.yaml \
+            {{ execution_dir }}
+          {% endif %}
+
+  adastra-mi250:
+    benchmark:
+      repetitions: 1
+      executor: "slurm"
+    vars:
+      threads_per_node:
+        type: int
+        expr: "256"
+      threads_per_rank:
+        type: int
+        expr: "{{ threads_per_node // ranks_per_node }}"
+      ranks_per_node:
+        type: int
+        sweep:
+          mode: list
+          values: [8]
+    scripts:
+      - name: "gys_compress_IOPS_benchmark"
+        inputs:
+          - name: mi250_gpu_binding
+            path: "{{ execution_dir }}/mi250_gpu_binding.sh"
+            mode: "0755"
+            template: |
+              #!/bin/bash
+              set -eu
+              AFFINITY_NUMACTL=('48-55,112-119' '56-63,120-127' '16-23,80-87' '24-31,88-95' '0-7,64-71' '8-15,72-79' '32-39,96-103' '40-47,104-111')
+              AFFINITY_GPU=('0' '1' '2' '3' '4' '5' '6' '7')
+              CPU_SET="${AFFINITY_NUMACTL[$SLURM_LOCALID]}"
+              export ROCR_VISIBLE_DEVICES="${AFFINITY_GPU[$SLURM_LOCALID]}"
+              exec numactl --localalloc --physcpubind="${CPU_SET}" -- "${@}"
+        script_template: |
+          #!/bin/bash
+          #SBATCH --job-name=gys_compress
+          #SBATCH --output=slurm.log
+          #SBATCH --nodes={{ nodes  }}
+          #SBATCH --ntasks-per-node={{ ranks_per_node }}
+          #SBATCH --time=00:10:00
+          #SBATCH --constraint="MI250"
+          #SBATCH --mem=0
+          #SBATCH --account=cad17895
+          #SBATCH --exclusive
+          set -e
+          set -o pipefail
+ 
+          BASE_DIR=/lus/home/CT6/cad17895/ilucas/gysela-mini-app_io
+ 
+          source $BASE_DIR/toolchains/adastra/mi250/environment.sh
+          source $BASE_DIR/.gys_env/bin/activate
+ 
+          unset LUA_PATH LUA_CPATH
+ 
+          export MPICH_GPU_SUPPORT_ENABLED=1
+
+          export GYS_DIAG_MODE={{ diag_mode }}
+ 
+          {% if diag_mode == 1 and deisa_version == 'dask' %}
+          srun --label -N 1 -n 1 --cpus-per-task={{ threads_per_node }} \
+            --threads-per-core=2 -r 0 \
+            dask scheduler --scheduler-file={{ schefile }} &
+ 
+          while ! [ -f {{ schefile }} ]; do
+            sleep 15
+            echo -n .
+          done
+ 
+          export DEISA_DASK_SCHEDULER_ADDRESS=$(jq -r '.["address"]' {{ schefile }})
+ 
+          echo "Launch ${DASK_WORKERS} dask worker(s)"
+          srun  --label -N {{ nb_workers }} -n {{ nb_workers }} \
+            --cpus-per-task={{ threads_per_node }} --threads-per-core=2 -r 1 \
+            dask worker --nworkers 1 --local-directory /tmp \
+              --scheduler-file={{ schefile }} &
+          dask_worker_pid=$!
+          sleep 10
+ 
+          echo "Launch analytics"
+          python3 $BASE_DIR/src/python/diagnostics.py &
+          analytics_pid=$!
+ 
+          REL=$(( 1 + {{ nb_workers }} ))
+          SIMU_NODES=$(( {{ nodes }} - {{ nb_workers }} - 1 ))
+          SIMU_RANKS=$(( SIMU_NODES * {{ ranks_per_node }} ))
+          #{% elif diag_mode == 1 and deisa_version == 'ray' %}
+          {% else %}
+          REL=0
+          SIMU_NODES={{ nodes }}
+          SIMU_RANKS=$(( SIMU_NODES * {{ ranks_per_node }} ))
+          {% endif %}
+ 
+          echo "Launch simu on $SIMU_NODES nodes ({{ ranks_per_node }} ranks/node, $SIMU_RANKS ranks total, 1 GCD/rank)"
+          srun -N $SIMU_NODES -n $SIMU_RANKS \
+            --cpu-bind=none --mem-bind=none -r ${REL} \
+            {{ inputs.mi250_gpu_binding.path }} \
+            $BASE_DIR/build/apps/compression/gys_compress \
+            {{ execution_dir }}/gys_compress.yaml \
+            $BASE_DIR/apps/compression/{{ pdi_yaml }} &
+          simu_pid=$!
+ 
+          {% if diag_mode == 1 and deisa_version == 'dask' %}
+          wait ${analytics_pid}
+          echo "Analytics over"
+          {% endif %}
+          wait ${simu_pid}
+          echo "Simulation over"
+ 
+
+          {% if diag_mode == 2 %}
+          python3 $BASE_DIR/src/python/finalize_reduced_diagnostics.py \
+            {{ execution_dir }}/gys_compress.yaml \
+            {{ execution_dir }}
+          {% endif %}
+ 
+  adastra-mi300:
+    benchmark:
+      repetitions: 1
+      executor: "slurm"
+    vars:
+      threads_per_node:
+        type: int
+        expr: "192"
+      threads_per_rank:
+        type: int
+        expr: "{{ threads_per_node // ranks_per_node }}"
+      ranks_per_node:
+        type: int
+        sweep:
+          mode: list
+          values: [4]
+    scripts:
+      - name: "gys_compress_IOPS_benchmark"
+        inputs:
+          - name: mi300_gpu_binding
+            path: "{{ execution_dir }}/mi300_gpu_binding.sh"
+            mode: "0755"
+            template: |
+              #!/bin/bash
+              set -eu
+              AFFINITY_NUMACTL=('0-23,96-119' '24-47,120-143' '48-71,144-167' '72-95,168-191')
+              AFFINITY_GPU=('0' '1' '2' '3')
+              CPU_SET="${AFFINITY_NUMACTL[$SLURM_LOCALID]}"
+              export ROCR_VISIBLE_DEVICES="${AFFINITY_GPU[$SLURM_LOCALID]}"
+              exec numactl --localalloc --physcpubind="${CPU_SET}" -- "${@}"
+        script_template: |
+          #!/bin/bash
+          #SBATCH --job-name=gys_compress
+          #SBATCH --output=slurm.log
+          #SBATCH --nodes={{ nodes  }}
+          #SBATCH --ntasks-per-node={{ ranks_per_node }}
+          #SBATCH --time=00:10:00
+          #SBATCH --constraint="MI300A"
+          #SBATCH --mem=0
+          #SBATCH --account=cad17895
+          #SBATCH --exclusive
+          set -e
+          set -o pipefail
+ 
+          BASE_DIR=/lus/home/CT6/cad17895/ilucas/gysela-mini-app_io
+ 
+          source $BASE_DIR/toolchains/adastra/mi250/environment.sh
+          source $BASE_DIR/.gys_env/bin/activate
+ 
+          unset LUA_PATH LUA_CPATH
+ 
+          export MPICH_GPU_SUPPORT_ENABLED=1
+ 
+          export GYS_DIAG_MODE={{ diag_mode }}
+ 
+          {% if diag_mode == 1 and deisa_version == 'dask' %}
+          srun --label -N 1 -n 1 --cpus-per-task={{ threads_per_node }} \
+            --threads-per-core=2 -r 0 \
+            dask scheduler --scheduler-file={{ schefile }} &
+ 
+          while ! [ -f {{ schefile }} ]; do
+            sleep 15
+            echo -n .
+          done
+ 
+          export DEISA_DASK_SCHEDULER_ADDRESS=$(jq -r '.["address"]' {{ schefile }})
+ 
+          echo "Launch ${DASK_WORKERS} dask worker(s)"
+          srun  --label -N {{ nb_workers }} -n {{ nb_workers }} \
+            --cpus-per-task={{ threads_per_node }} --threads-per-core=2 -r 1 \
+            dask worker --nworkers 1 --local-directory /tmp \
+              --scheduler-file={{ schefile }} &
+          dask_worker_pid=$!
+          sleep 10
+ 
+          echo "Launch analytics"
+          python3 $BASE_DIR/src/python/diagnostics.py &
+          analytics_pid=$!
+ 
+          REL=$(( 1 + {{ nb_workers }} ))
+          SIMU_NODES=$(( {{ nodes }} - {{ nb_workers }} - 1 ))
+          SIMU_RANKS=$(( SIMU_NODES * {{ ranks_per_node }} ))
+          #{% elif diag_mode == 1 and deisa_version == 'ray' %}
+          {% else %}
+          REL=0
+          SIMU_NODES={{ nodes }}
+          SIMU_RANKS=$(( SIMU_NODES * {{ ranks_per_node }} ))
+          {% endif %}
+ 
+          echo "Launch simu on $SIMU_NODES nodes ({{ ranks_per_node }} ranks/node, $SIMU_RANKS ranks total, 1 APU/rank)"
+          srun -N $SIMU_NODES -n $SIMU_RANKS \
+            --cpu-bind=none --mem-bind=none -r ${REL} \
+            {{ inputs.mi300_gpu_binding.path }} \
+            $BASE_DIR/build/apps/compression/gys_compress \
+            {{ execution_dir }}/gys_compress.yaml \
+            $BASE_DIR/apps/compression/{{ pdi_yaml }} &
+          simu_pid=$!
+ 
+          {% if diag_mode == 1 and deisa_version == 'dask' %}
+          wait ${analytics_pid}
+          echo "Analytics over"
+          {% endif %}
+          wait ${simu_pid}
+          echo "Simulation over"
+ 
+          {% if diag_mode == 2 %}
+          python3 $BASE_DIR/src/python/finalize_reduced_diagnostics.py \
+            {{ execution_dir }}/gys_compress.yaml \
+            {{ execution_dir }}
+          {% endif %}
+

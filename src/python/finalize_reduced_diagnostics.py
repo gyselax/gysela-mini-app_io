@@ -47,5 +47,7 @@ def main():
 
 
 if __name__ == "__main__":
+    t0 = time.time()
     main()
+    print("Time post-hoc diagnostics:", time.time() - t0, flush=True)
 

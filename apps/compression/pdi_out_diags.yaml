@@ -78,14 +78,18 @@ plugins:
       Init:
         with: {}
         exec: |
+          import os
           import time
           import numpy as np
           from mpi4py import MPI
           from deisa.dask import Bridge
           import compression_diagnostics
+          import reduced_diagnostics
           import pdi
           comm = MPI.COMM_WORLD
           rank = comm.Get_rank()
+          # 0 = full f through deisa, 1 = reduced through deisa, 2 = reduced to csv (deisa bypassed)
+          diag_mode = int(os.environ.get("GYS_DIAG_MODE", "0"))
       InitBridge:
         with: { global_fdistribu_extents: $global_fdistribu_extents,
                 local_fdistribu_extents: $local_fdistribu_extents,
@@ -103,6 +107,7 @@ plugins:
           global_shape = tuple(int(x) for x in global_fdistribu_extents)
           local_shape  = tuple(int(x) for x in local_fdistribu_extents)
           chunk_pos    = tuple((local_fdistribu_starts // local_fdistribu_extents).astype(int).tolist())
+          nsp_global = global_shape[0]
           arrays_metadata = {
               'fdistribu': {
                   'global_shape':   global_shape,
@@ -113,6 +118,11 @@ plugins:
                   'global_shape':   global_shape,
                   'chunk_shape':    local_shape,
                   'chunk_position': chunk_pos,
+              },
+              'fdistribu_reduced': {
+                  'global_shape':   (comm.Get_size(), nsp_global, reduced_diagnostics.N_PARTIALS),
+                  'chunk_shape':    (1, nsp_global, reduced_diagnostics.N_PARTIALS),
+                  'chunk_position': (rank, 0, 0),
               },
           }
 
@@ -136,6 +146,7 @@ plugins:
             arrays_metadata = dict(arrays_metadata, **non_dist_arrays)
 
           bridge = Bridge(comm, arrays_metadata)
+          t1 = time.time()
       iteration:
         with:
           fdistribu: $fdistribu
@@ -143,7 +154,6 @@ plugins:
           t: $absolute_time
           deltat: $deltat
           iter_offset: $iter_offset
-          deltat: $deltat
           nbstep_diag: $nbstep_diag
           nb_step_compression: $nb_step_compression
           compression_mode: $compression_mode
@@ -153,20 +163,15 @@ plugins:
           MeshVy: $MeshVy
           local_fdistribu_starts: $local_fdistribu_starts
         exec: |
+          t0 = time.time()
           timestep = int(it) + int(iter_offset)
+          if rank == 0:
+            print(f"C++ iteration time : {t0 - t1}", flush=True)
 
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
             if int(compression_mode) == 1:
-              starts = np.asarray(local_fdistribu_starts).astype(int)
-              nx_l, ny_l, nvx_l, nvy_l = fdistribu.shape[1:]
-              local_bounds = (
-                float(MeshX[starts[1]]), float(MeshX[starts[1] + nx_l - 1]),
-                float(MeshY[starts[2]]), float(MeshY[starts[2] + ny_l - 1]),
-                float(MeshVx[starts[3]]), float(MeshVx[starts[3] + nvx_l - 1]),
-                float(MeshVy[starts[4]]), float(MeshVy[starts[4] + nvy_l - 1]),
-              )
-              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank(), local_bounds=local_bounds)
+              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
@@ -186,8 +191,18 @@ plugins:
               pdi.event("read_compressed_fdistribu")
 
           if timestep % int(nbstep_diag) == 0:
-            bridge.send("fdistribu", fdistribu, timestep)
-            if rank == 0:
+            if diag_mode == 1:
+              # Reduced diagnostics: local partial sums, finished by the fdistribu_reduced callback
+              partial = reduced_diagnostics.local_reduce(fdistribu, local_fdistribu_starts, MeshVx, MeshVy, nsp_global)
+              bridge.send("fdistribu_reduced", partial[None], timestep)
+            elif diag_mode == 2:
+              # Reduced diagnostics: local partial sums to csv, finished post hoc (deisa bypassed / post-hoc finalization)
+              partial = reduced_diagnostics.local_reduce(fdistribu, local_fdistribu_starts, MeshVx, MeshVy, nsp_global)
+              reduced_diagnostics.append_partial_csv(partial, timestep, float(t), rank)
+            else:
+              bridge.send("fdistribu", fdistribu, timestep)
+
+            if diag_mode != 2 and rank == 0:
               bridge.send("absolute_time", np.array([float(t)]), timestep)
               bridge.send("deltat", np.array([float(deltat)]), timestep)
               bridge.send("MeshX",  np.array(MeshX),  timestep)
@@ -196,7 +211,8 @@ plugins:
               bridge.send("MeshVy", np.array(MeshVy), timestep)
           if timestep % 10 == 0:
             if rank == 0:
-              print(f"--------------------------timestep: {timestep}")
+              print(f"--------------------------timestep: {timestep}", flush=True)
+          t1 = time.time()
       last_iteration:
         with:
           fdistribu: $fdistribu
@@ -204,7 +220,6 @@ plugins:
           t: $absolute_time
           deltat: $deltat
           iter_offset: $iter_offset
-          deltat: $deltat
           nb_step_compression: $nb_step_compression
           compression_mode: $compression_mode
           MeshX: $MeshX
@@ -218,15 +233,7 @@ plugins:
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
             if int(compression_mode) == 1:
-              starts = np.asarray(local_fdistribu_starts).astype(int)
-              nx_l, ny_l, nvx_l, nvy_l = fdistribu.shape[1:]
-              local_bounds = (
-                float(MeshX[starts[1]]), float(MeshX[starts[1] + nx_l - 1]),
-                float(MeshY[starts[2]]), float(MeshY[starts[2] + ny_l - 1]),
-                float(MeshVx[starts[3]]), float(MeshVx[starts[3] + nvx_l - 1]),
-                float(MeshVy[starts[4]]), float(MeshVy[starts[4] + nvy_l - 1]),
-              )
-              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank(), local_bounds=local_bounds)
+              compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
@@ -245,8 +252,18 @@ plugins:
                   time.sleep(0.05)
               pdi.event("read_compressed_fdistribu")
 
-          bridge.send("fdistribu", fdistribu, timestep)
-          if rank == 0:
+          if diag_mode == 1:
+            # Reduced diagnostics: local partial sums, finished by the fdistribu_reduced callback
+            partial = reduced_diagnostics.local_reduce(fdistribu, local_fdistribu_starts, MeshVx, MeshVy, nsp_global)
+            bridge.send("fdistribu_reduced", partial[None], timestep)
+          elif diag_mode == 2:
+            # Reduced diagnostics: local partial sums to csv, finished post hoc (deisa bypassed)
+            partial = reduced_diagnostics.local_reduce(fdistribu, local_fdistribu_starts, MeshVx, MeshVy, nsp_global)
+            reduced_diagnostics.append_partial_csv(partial, timestep, float(t), rank)
+          else:
+            bridge.send("fdistribu", fdistribu, timestep)
+
+          if diag_mode != 2 and rank == 0:
             bridge.send("absolute_time", np.array([float(t)]), timestep)
             bridge.send("deltat", np.array([float(deltat)]), timestep)
             bridge.send("MeshX",  np.array(MeshX),  timestep)
@@ -320,3 +337,4 @@ plugins:
             start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
         electrostatic_potential: ~
   #trace: ~
+

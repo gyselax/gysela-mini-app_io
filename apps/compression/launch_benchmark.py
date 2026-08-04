@@ -191,6 +191,20 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--diag-mode",
+        type=int,
+        choices=[0, 1, 2],
+        default=0,
+        help=(
+            "In-situ diagnostics mode (sets GYS_DIAG_MODE for every branch): "
+            "0 = full fdistribu through deisa, FFT-based Poisson solve (default); "
+            "1 = local per-rank reduction sent through the deisa bridge; "
+            "2 = local per-rank reduction written to per-rank csv, deisa bypassed "
+            "-- run src/python/finalize_reduced_diagnostics.py <branch_dir> afterwards to produce diagnostics.csv."
+        ),
+    )
+
+    parser.add_argument(
         "--arch",
         default="GENOA" if resolve_site() == "adastra" else "xeon",
         help=(
@@ -556,7 +570,7 @@ def write_compression_manifest(run_dir, compression_events):
     print(f"\nCompression event manifest written to: {manifest_path}")
 
 
-def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
+def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1, diag_mode=0):
     dir_baseline = os.path.join(run_dir, "branch_baseline")
     yaml_baseline = os.path.join(run_dir, "config_baseline.yaml")
 
@@ -575,12 +589,13 @@ def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
         pdi_yaml=run_pdi_yaml,
         work_dir=dir_baseline,
         n_workers=n_workers,
+        extra_env={"GYS_DIAG_MODE": diag_mode},
     )
 
     return dir_baseline
 
 
-def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, mesh_kwargs=None, n_workers=1):
+def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, mesh_kwargs=None, n_workers=1, diag_mode=0):
     dir_offline = os.path.join(run_dir, "branch_offline_compressed")
     yaml_offline = os.path.join(run_dir, "config_offline_compressed.yaml")
 
@@ -595,7 +610,9 @@ def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression
         compression_mode=2,
     )
 
-    extra_env = {"COMPRESSION_MESH_KWARGS": json.dumps(mesh_kwargs)} if mesh_kwargs else None
+    extra_env = {"GYS_DIAG_MODE": diag_mode}
+    if mesh_kwargs:
+        extra_env["COMPRESSION_MESH_KWARGS"] = json.dumps(mesh_kwargs)
 
     run_sim_with_diagnostics(
         branch_name="Offline compressed",
@@ -620,7 +637,7 @@ def _collect_offline_compression_events(work_dir):
         return [dict(row) for row in csv.DictReader(fh)]
 
 
-def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1):
+def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1, diag_mode=0):
     dir_online = os.path.join(run_dir, "branch_online_compressed")
     yaml_online = os.path.join(run_dir, "config_online_compressed.yaml")
 
@@ -641,6 +658,7 @@ def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_
         pdi_yaml=run_pdi_yaml,
         work_dir=dir_online,
         n_workers=n_workers,
+        extra_env={"GYS_DIAG_MODE": diag_mode},
     )
 
     events = _collect_online_compression_events(dir_online)
@@ -734,6 +752,7 @@ def submit_batch_and_wait(args):
         forwarded.append("--keep-pdi-copy")
     if args.online:
         forwarded.append("--online")
+    forwarded += ["--diag-mode", str(args.diag_mode)]
     if args.dask_workers is not None:
         forwarded += ["--dask-workers", str(args.dask_workers)]
     forwarded += ["--nprocs", str(args.nprocs)]
@@ -822,6 +841,7 @@ def run_pipeline(args):
             run_pdi_yaml=run_pdi_yaml,
             iter_total=iter_total,
             n_workers=n_workers,
+            diag_mode=args.diag_mode,
         )
 
     if args.online:
@@ -831,6 +851,7 @@ def run_pipeline(args):
             iter_total=iter_total,
             compression_period=compression_period,
             n_workers=n_workers,
+            diag_mode=args.diag_mode,
         )
     else:
         run_offline_compressed_branch(
@@ -840,6 +861,7 @@ def run_pipeline(args):
             compression_period=compression_period,
             mesh_kwargs=mesh_kwargs,
             n_workers=n_workers,
+            diag_mode=args.diag_mode,
         )
 
     if not args.keep_pdi_copy:

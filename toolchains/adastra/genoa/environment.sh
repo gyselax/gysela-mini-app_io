@@ -37,9 +37,9 @@ eval -- "$(
     spack \
         --env "$SPACK_USER_PREFIX" \
         load --sh \
-        cmake \
+        cmake/fj24njq \
         ddc \
-        gcc \
+        gcc/qqhhni4 \
         ginkgo \
         gmgpolar \
         googletest \

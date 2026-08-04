@@ -1,7 +1,6 @@
 """In-situ diagnostics: conserved-variable calculations and deisa analytics callback."""
 
 import csv
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,14 +10,9 @@ from deisa.dask import Deisa
 from distributed import get_client
 
 import compression_diagnostics
+import reduced_diagnostics
 
 _MEASURE_CFG = None
-
-# Wall-clock reference point for this process, taken as soon as diagnostics.py
-# starts (i.e. essentially when the simulation launches). Elapsed time from
-# here covers simulation, compression, and diagnostics running concurrently.
-_START_TIME = time.monotonic()
-
 
 @dataclass
 class PathsConfig:
@@ -177,7 +171,6 @@ def measure(cfg, f, Efield, it, t_actual):
     data = {
         "iter":       it,
         "time":       float(t_actual),
-        "cpu_time":   time.monotonic() - _START_TIME,
         "ekin":       ekin,
         "epot":       epot,
         "etot":       ekin + epot,
@@ -212,6 +205,19 @@ def compute_offline_compression(fdistribu_chunks):
     compression_diagnostics.run_offline_compression_on_global_array(fdistribu_global, timestep)
 
     deisa.set("fdistribu_offline_done", True, timestep=timestep)
+
+
+@deisa.register("fdistribu_reduced", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
+def compute_reduced_diagnostics(reduced, deltat, mx, my, mvx, mvy):
+    timestep = int(reduced[0].t)
+    t_actual = timestep * float(deltat[0][0].compute())
+
+    dV_4D = (GridConfig.spacing(mx[0]) * GridConfig.spacing(my[0])
+              * GridConfig.spacing(mvx[0]) * GridConfig.spacing(mvy[0]))
+
+    partials = np.asarray(reduced[0].sum(axis=0))  # (n_ranks, Nsp, 5) -> (Nsp, 5)
+
+    reduced_diagnostics.write_diagnostics_rows(partials, dV_4D, timestep, t_actual, _INITIALIZED_DIAG_FILES)
 
 
 @deisa.register("fdistribu", "absolute_time", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
@@ -260,3 +266,4 @@ def _sort_diagnostics_files():
 
 
 _sort_diagnostics_files()
+

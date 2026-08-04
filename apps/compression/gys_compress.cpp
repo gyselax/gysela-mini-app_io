@@ -440,10 +440,10 @@ int main(int argc, char **argv) {
 
   predcorr(get_field(allfdistribu_v2D_split), deltat, nbiter);
 
-  ddc::PdiEvent("EndSimulation").with("iter", nbiter);
-
   time_points[3] = steady_clock::now();
   timing_names[2] = "full simulation";
+
+  ddc::PdiEvent("EndSimulation").with("iter", nbiter);
 
   if (rank == 0) {
     double durations[4];

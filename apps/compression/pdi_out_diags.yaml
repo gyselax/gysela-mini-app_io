@@ -111,7 +111,6 @@ plugins:
           Nvx = int(MeshVx_extents[0])
           Nvy = int(MeshVy_extents[0])
           global_shape = tuple(int(x) for x in global_fdistribu_extents)
-          print(f"{global_shape=}", flush=True)
           local_shape  = tuple(int(x) for x in local_fdistribu_extents)
           chunk_pos    = tuple((local_fdistribu_starts // local_fdistribu_extents).astype(int).tolist())
           nsp_global = global_shape[0]

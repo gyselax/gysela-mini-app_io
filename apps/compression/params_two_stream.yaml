@@ -40,7 +40,7 @@ compression:
     clip_nonnegative: false
   NN:
     arch: "periodic_siren_deep_128"
-    lr: 1.0e-3 # for offline compression, the lr decay is applied only when is_warm is true; the lr is kept constant for the cold-start phase
+    lr: 1.0e-3 # for offline compression, a lr decay is applied only when is_warm is true; the lr is kept constant for the cold-start phase
     max_iters: 2000
     batch_size: 50000
     lbfgs_iters: 50

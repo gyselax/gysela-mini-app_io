@@ -35,7 +35,8 @@ import numpy as np
 import yaml
 from jax.flatten_util import ravel_pytree
 
-from compression_methods.neural_network import NeuralNetworkCompressor
+from compression_methods.neural_network import NeuralNetworkCompressor, _losses_function
+from scimba_jax.nonlinear_approximation.optimizers.optimizers import ScimbaAdam
 
 jax.config.update("jax_enable_x64", True)
 
@@ -159,6 +160,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--params-yaml", default=DEFAULT_PARAMS_YAML,
                          help="GYSELA yaml to read grid bounds/resolution + NN config from (default: apps/compression/params_two_stream.yaml)")
+    parser.add_argument("--arch", default=None,
+                         help="Override the yaml's compression.NN.arch (e.g. periodic_siren_small_32), "
+                              "to test GN on a smaller network without editing the yaml.")
     parser.add_argument("--n-map", type=int, default=None,
                          help="Gauss-Newton mini-batch size per step. Default: the FULL production grid "
                               "(nx*ny*nvx*nvy), matching what NeuralNetworkCompressor's L-BFGS phase "
@@ -166,11 +170,23 @@ def main():
     parser.add_argument("--n-iterations", type=int, default=2)
     parser.add_argument("--init-damping", type=float, default=1e-2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--fixed-batch", action="store_true",
+                         help="Re-fit the SAME mini-batch at every GN iteration instead of "
+                              "resampling a fresh one each step, to isolate whether resampling "
+                              "noise (vs. the GN direction itself) explains poor convergence.")
+    parser.add_argument("--adam-warmup-iters", type=int, default=0,
+                         help="Run ScimbaAdam for this many resampled-mini-batch iterations "
+                              "BEFORE handing the model to train_map_gn, as Philipp suggested "
+                              "(precondition with Adam instead of starting GN from random init).")
+    parser.add_argument("--adam-warmup-batch-size", type=int, default=8000)
+    parser.add_argument("--adam-lr", type=float, default=1e-3)
     args = parser.parse_args()
 
     print("JAX devices:", jax.devices())
 
     cfg = load_production_config(args.params_yaml)
+    if args.arch is not None:
+        cfg["arch"] = args.arch
     print(f"\nLoaded production config from {args.params_yaml}:")
     print(f"  grid (nx,ny,nvx,nvy) = ({cfg['nx']}, {cfg['ny']}, {cfg['nvx']}, {cfg['nvy']})"
           f"  -> {cfg['nx']*cfg['ny']*cfg['nvx']*cfg['nvy']:,} points")
@@ -197,10 +213,20 @@ def main():
     print(f"n_map (GN mini-batch size) = {n_map:,}"
           + (" (= full grid, matching L-BFGS's current full-batch phase)" if n_map == n_points else ""))
 
-    def make_data(n_map, key):
-        key, subkey = jax.random.split(key)
-        idx = jax.random.choice(subkey, n_points, shape=(n_map,), replace=(n_map > n_points))
-        return inputs[idx], targets[idx], key
+    if args.fixed_batch:
+        fixed_key = jax.random.PRNGKey(args.seed + 1)
+        fixed_idx = jax.random.choice(fixed_key, n_points, shape=(n_map,), replace=(n_map > n_points))
+        fixed_inputs, fixed_targets = inputs[fixed_idx], targets[fixed_idx]
+        print("--fixed-batch: GN will re-fit the SAME batch at every iteration (no resampling).")
+
+        def make_data(n_map, key):
+            del n_map
+            return fixed_inputs, fixed_targets, key
+    else:
+        def make_data(n_map, key):
+            key, subkey = jax.random.split(key)
+            idx = jax.random.choice(subkey, n_points, shape=(n_map,), replace=(n_map > n_points))
+            return inputs[idx], targets[idx], key
 
     key = jax.random.PRNGKey(args.seed)
     model = get_inr_model_from_compressor(compressor, key)
@@ -209,6 +235,21 @@ def main():
     print(f"\nn_params = {n_params}")
     print(f"expected JTJ size (float64) = {n_params * n_params * 8 / 1e9:.2f} GB")
     print(f"n_iterations = {args.n_iterations}\n")
+
+    if args.adam_warmup_iters > 0:
+        print(f"=== Adam warmup: {args.adam_warmup_iters} iters, "
+              f"batch_size={args.adam_warmup_batch_size}, lr={args.adam_lr} ===")
+        adam_opt = ScimbaAdam(model, _losses_function, learning_rate=args.adam_lr)
+        t_warm0 = time.perf_counter()
+        for i in range(args.adam_warmup_iters):
+            key, subkey = jax.random.split(key)
+            idx = jax.random.choice(subkey, n_points, shape=(args.adam_warmup_batch_size,), replace=False)
+            batch = (inputs[idx], targets[idx])
+            loss_dict, model, adam_opt = adam_opt.update(model, batch)
+            if i % 200 == 0 or i == args.adam_warmup_iters - 1:
+                print(f"  [Adam warmup] iter {i:5d}  loss={float(loss_dict['total']):.6e}  "
+                      f"t={time.perf_counter() - t_warm0:.2f}s")
+        print(f"Adam warmup done in {time.perf_counter() - t_warm0:.2f}s\n")
 
     t0 = time.perf_counter()
     try:
@@ -220,6 +261,16 @@ def main():
         t1 = time.perf_counter()
         print(f"\nOK: completed {args.n_iterations} GN iterations in {t1 - t0:.2f}s")
         print(f"loss history: {loss_hist}")
+
+        # Held-out check: the printed loss_hist (fixed-batch mode) is measured on the
+        # SAME points the model was fit on, so a low value could just mean memorizing
+        # those 8000 points rather than generalizing. Evaluate on a fresh random sample
+        # (never used for training) to get a number comparable to Adam's resampled-batch loss.
+        eval_key = jax.random.PRNGKey(args.seed + 999)
+        eval_idx = jax.random.choice(eval_key, n_points, shape=(min(50_000, n_points),), replace=False)
+        eval_pred = jax.vmap(final_model)(inputs[eval_idx])
+        eval_loss = float(jnp.mean((eval_pred - targets[eval_idx]) ** 2))
+        print(f"held-out loss (fresh 50,000-point sample, never used for training): {eval_loss:.6e}")
     except Exception as e:
         t1 = time.perf_counter()
         print(f"\nFAILED after {t1 - t0:.2f}s: {type(e).__name__}")

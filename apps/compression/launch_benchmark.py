@@ -875,6 +875,7 @@ def run_pipeline(args):
                 "max_iters": int(nn_cfg.get("max_iters", 2000)),
                 "batch_size": int(nn_cfg.get("batch_size", 2000)),
                 "lbfgs_iters": int(nn_cfg.get("lbfgs_iters", 50)),
+                "lbfgs_chunk_size": int(nn_cfg.get("lbfgs_chunk_size", 200_000)),
             }
         }
 

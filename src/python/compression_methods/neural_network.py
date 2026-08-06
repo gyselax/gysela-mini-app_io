@@ -8,6 +8,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 from jax.flatten_util import ravel_pytree
 from tqdm import tqdm
 
@@ -179,6 +180,62 @@ def _losses_function(model: eqx.Module, batch: tuple) -> dict:
 
     return {"total":mse}
 
+# Chunked losses for L-BFGS
+def make_chunked_losses_function(chunk_size: int):
+    """
+    L-BFGS trains full-batch so that its curvature estimate sees a consistent, deterministic objective across iterations. 
+    At high grid resolutions a single jax.vmap(model) over the
+    entire batch needs more activation memory than fits on the GPU. This builds
+    a drop-in replacement for `_losses_function` (same (model, batch) -> {"total"}
+    contract, so it plugs directly into ScimbaLBfgs/ScimbaAdam) that processes the
+    batch in fixed-size chunks via jax.lax.scan, each chunk wrapped in
+    jax.checkpoint so the backward pass recomputes its activations instead of
+    keeping every chunk's activations resident at once. Peak memory becomes
+    O(chunk_size) instead of O(N); the loss and gradient stay mathematically
+    identical to the unchunked full-batch computation (MSE is a plain average of
+    independent per-point terms, so summing it in chunks is exact, not an
+    approximation) -- see src/tests/chunked_lbfgs_experiment.py for the
+    correctness check (chunked vs unchunked gradient differs by ~1e-17, float64
+    epsilon) and the real-grid OOM validation this was ported from.
+    """
+    
+    @jax.jit
+    def _chunked_losses_function(model: eqx.Module, batch: tuple) -> dict:
+        inputs, targets = batch
+        n = inputs.shape[0]
+        n_chunks = -(-n // chunk_size)  # ceil division, static python int
+        n_pad = n_chunks * chunk_size - n
+
+        if n_pad > 0:
+            pad_in = jnp.zeros((n_pad,) + inputs.shape[1:], dtype=inputs.dtype)
+            pad_t = jnp.zeros((n_pad,) + targets.shape[1:], dtype=targets.dtype)
+            inputs_p = jnp.concatenate([inputs, pad_in], axis=0)
+            targets_p = jnp.concatenate([targets, pad_t], axis=0)
+            mask = jnp.concatenate([
+                jnp.ones((n,), dtype=inputs.dtype),
+                jnp.zeros((n_pad,), dtype=inputs.dtype),
+            ])
+        else:
+            inputs_p, targets_p, mask = inputs, targets, jnp.ones((n,), dtype=inputs.dtype)
+
+        inputs_c = inputs_p.reshape((n_chunks, chunk_size) + inputs.shape[1:])
+        targets_c = targets_p.reshape((n_chunks, chunk_size) + targets.shape[1:])
+        mask_c = mask.reshape((n_chunks, chunk_size))
+
+        @jax.checkpoint
+        def chunk_step(carry, xs):
+            x_chunk, t_chunk, m_chunk = xs
+            pred = jax.vmap(model)(x_chunk)
+            sq_err = jnp.sum(((pred - t_chunk) ** 2).squeeze(-1) * m_chunk)
+            return carry + sq_err, None
+
+        total_sse, _ = jax.lax.scan(chunk_step, jnp.zeros((), dtype=targets.dtype),
+                                     (inputs_c, targets_c, mask_c))
+        mse = total_sse / n
+        return {"total": mse}
+
+    return _chunked_losses_function
+
 # Reconstruction: unlike training, this always evaluates the *entire* grid, so
 # (unlike batch_size, which only bounds training mini-batches) it needs its own
 # chunking to keep peak memory bounded.
@@ -222,9 +279,11 @@ class NeuralNetworkCompressor(Compressor):
         vy_max: float,
         arch: str = "periodic_siren_deep_128",
         lr: float = 1e-3,
+        lr_decay_alpha: float = 0.01,
         max_iters: int = 2000,
         batch_size: int = 2000,
         lbfgs_iters: int = 50,
+        lbfgs_chunk_size: int = 200_000,
         clear_cache_every: int = 5,
         threshold: float = 1e-8,
         seed: int = 42,
@@ -241,10 +300,16 @@ class NeuralNetworkCompressor(Compressor):
  
         self.arch = arch
         self.lr = float(lr)
+        self.lr_decay_alpha = float(lr_decay_alpha)
         self.max_iters = int(max_iters)
         self.batch_size = int(batch_size)
         self.lbfgs_iters = int(lbfgs_iters)
-        
+        self.lbfgs_chunk_size = int(lbfgs_chunk_size)
+        # Built once and reused across every _fit_on_species call (all species,
+        # all timesteps): same python function object each time -> jax.jit's
+        # compilation cache is hit after the first call instead of retracing.
+        self._chunked_losses_fn = make_chunked_losses_function(self.lbfgs_chunk_size)
+
         self.clear_cache_every = int(clear_cache_every)
         self._n_compress_calls = 0
         
@@ -257,9 +322,11 @@ class NeuralNetworkCompressor(Compressor):
             method_name=self.method_name,
             arch=self.arch,
             lr=self.lr,
+            lr_decay_alpha=self.lr_decay_alpha,
             max_iters=self.max_iters,
             batch_size=self.batch_size,
             lbfgs_iters=self.lbfgs_iters,
+            lbfgs_chunk_size=self.lbfgs_chunk_size,
         )
         
         self.original_shape = None
@@ -336,8 +403,14 @@ class NeuralNetworkCompressor(Compressor):
         
         best_model, best_loss = model, float("inf")
 
-        #Phase 1: ADAM, mini-batches
-        adam_opt = ScimbaAdam(model, _losses_function, learning_rate=self.lr)
+        #Phase 1: ADAM, mini-batches. On a warm-started species only, lr decays over the run instead of staying constant
+        if is_warm:
+            learning_rate = optax.cosine_decay_schedule(
+                init_value=self.lr, decay_steps=self.max_iters, alpha=self.lr_decay_alpha
+            )
+        else:
+            learning_rate = self.lr
+        adam_opt = ScimbaAdam(model, _losses_function, learning_rate=learning_rate)
         pbar = _training_progress(self.max_iters, f"[INR/{self.arch}][ADAM]", self.verbose)
         for i in pbar:
             key, subkey = jax.random.split(key)
@@ -349,16 +422,20 @@ class NeuralNetworkCompressor(Compressor):
             loss_val = float(loss_dict["total"])
             loss_history.append(loss_val)
 
+            if loss_val < best_loss:
+                best_model, best_loss = model, loss_val
+
             if self.verbose and i % 100 == 0:
                  print(f"  [INR/{self.arch}][ADAM/{tag}] iter {i:4d} - loss: {loss_val:.2e}")
             if loss_val < self.threshold:
                 pbar.write(f"  [INR/{self.arch}][ADAM] early convergence at iter {i}")
                 break
 
-        #Phase 2: L-BFGS, full-batch
+        #Phase 2: L-BFGS, full-batch (chunked + checkpointed to bound peak memory
+        #Resumes from ADAM's best point (best_model), not wherever ADAM happened to end up
+        model = best_model
         full_batch = (inputs, targets)
-        lbfgs_opt = ScimbaLBfgs(model, _losses_function)
-        best_model, best_loss = model, float("inf")
+        lbfgs_opt = ScimbaLBfgs(model, self._chunked_losses_fn)
         pbar = _training_progress(self.lbfgs_iters, f"[INR/{self.arch}][L-BFGS]", self.verbose)
         for i in pbar:
             loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
@@ -368,6 +445,9 @@ class NeuralNetworkCompressor(Compressor):
 
             if loss_val < best_loss:
                 best_model, best_loss = model, loss_val
+            
+            if self.verbose and i % 10 == 0:
+                print(f"  [INR/{self.arch}][L-BFGS/{tag}] iter {i:4d} - loss: {loss_val:.2e}")
 
             if loss_val < self.threshold:
                 pbar.write(f"  [INR/{self.arch}][L-BFGS] convergence at iter {i}")
@@ -443,12 +523,23 @@ class NeuralNetworkCompressor(Compressor):
     def decompress_array(self, compressed: dict) -> jnp.ndarray:
         models = compressed["models"]
         nx, ny, nvx, nvy = compressed["grid_shape"]
+        t0 = time.perf_counter()
+        print(
+            f"[INR/{self.arch}] Decompression started "
+            f"(Number of species={len(models)}, grid=({nx}, {ny}, {nvx}, {nvy}))...",
+            flush=True,
+        )
         inputs = self._build_inputs(nx, ny, nvx, nvy)
         
         species_out = []
         for model in models:
             pred = _vmap_in_chunks(model, inputs, self.batch_size).reshape(nx, ny, nvx, nvy)
             species_out.append(pred)
+
+        print(
+            f"[INR/{self.arch}] Decompression finished in {time.perf_counter() - t0:.2f}s",
+            flush=True,
+        )
             
         return jnp.stack(species_out)
     

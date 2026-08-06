@@ -22,6 +22,7 @@ OFFLINE_COMPRESSOR_PARAMS = {
     "max_iters": 2000,
     "batch_size": 2000,
     "lbfgs_iters": 50,
+    "lbfgs_chunk_size": 200_000,
 }
 
 ONLINE_COMPRESSOR_CLASS = RandomNoiseCompressor

@@ -207,35 +207,56 @@ def plot_frobenius(compression_cases, out_dir, filt=None, name="frob_error_compa
     fig.tight_layout()
     save_fig(fig, out_dir / name)
     plt.close(fig)
-    
-def plot_cpu_time(compression_cases, out_dir):
-    labels, comp_t, decomp_t, sim_t = [], [], [], []
-    for label, iters, data in compression_cases:
-        labels.append(label)
-        comp_t.append(float(np.sum(data.get("compression_seconds", [0.0]))))
-        decomp_t.append(float(np.sum(data.get("decompression_seconds", [0.0]))))
-        sim_vals = [v for v in data.get("sim_time_approx", []) if v]
-        sim_t.append(float(np.sum(sim_vals)) if sim_vals else 0.0)
-        
-    if not labels:
-        print("No compression_events_offline.csv found for --cpu-time.")
-        return 
 
-    x = np.arange(len(labels))
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(x, sim_t, label="Simulation (approx.)", color="#1f77b4")
-    ax.bar(x, comp_t, bottom=sim_t, label="Compression", color="#ff7f0e")
-    ax.bar(x, decomp_t, bottom=np.array(sim_t) + np.array(comp_t), label="Decompression", color="#2ca02c")
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=20, ha="right", fontsize=8)
-    ax.set_ylabel("Cumulative CPU time (s)")
-    ax.set_title("Computational cost")
-    ax.legend()
-    ax.grid(True, axis="y", alpha=0.4)
-    fig.tight_layout()
-    save_fig(fig, out_dir / "cpu_time_comparison")
-    plt.close(fig)
-    
+def plot_checkpoint_time(compression_cases, out_dir):
+    """Per-checkpoint compression+decompression time: one figure per case, one
+    stacked bar ("bande") per checkpoint (compression then decompression on
+    top), annotated with that checkpoint's time in seconds and minutes, plus
+    the run's total time annotated on the figure.
+    """
+    for label, iters, data in compression_cases:
+        comp_t = np.asarray(data.get("compression_seconds", []), dtype=float)
+        decomp_t = np.asarray(data.get("decompression_seconds", []), dtype=float)
+        if comp_t.size == 0 and decomp_t.size == 0:
+            continue
+        n = len(iters)
+        if comp_t.size != n:
+            comp_t = np.zeros(n)
+        if decomp_t.size != n:
+            decomp_t = np.zeros(n)
+
+        x = np.arange(n)
+        fig, ax = plt.subplots(figsize=(max(10, 0.8 * n + 2), 6))
+        ax.bar(x, comp_t, color="#ff7f0e", label="Compression")
+        ax.bar(x, decomp_t, bottom=comp_t, color="#2ca02c", label="Decompression")
+
+        checkpoint_total = comp_t + decomp_t
+        headroom = checkpoint_total.max() * 0.15 if checkpoint_total.max() > 0 else 1.0
+        for xi, total_i in zip(x, checkpoint_total):
+            ax.text(
+                xi, total_i + headroom * 0.05, f"{total_i:.1f}s\n({total_i / 60:.2f} min)",
+                ha="center", va="bottom", fontsize=9,
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(it) for it in iters], rotation=0)
+        ax.set_xlabel("Checkpoint (iter)")
+        ax.set_ylabel("Time (s)")
+        ax.set_ylim(top=(checkpoint_total.max() + headroom) if checkpoint_total.max() > 0 else 1.0)
+
+        total_all = float(checkpoint_total.sum())
+        ax.set_title(f"{label}: compression + decompression time per checkpoint")
+        ax.text(
+            0.99, 0.98, f"Total: {total_all:.1f} s ({total_all / 60:.2f} min)",
+            transform=ax.transAxes, ha="right", va="top", fontsize=11, fontweight="bold",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
+        ax.legend(loc="upper left")
+        ax.grid(True, axis="y", alpha=0.4)
+        fig.tight_layout()
+        save_fig(fig, out_dir / f"checkpoint_time_{label}")
+        plt.close(fig)
+
 def plot_svd_spectrum(data_dirs, compression_cases, out_dir):
     fig, ax = plt.subplots(figsize=(9, 5.5))
     found = False
@@ -345,13 +366,19 @@ def _load_final_snapshot(branch_dir, species=0):
     return fdistribu, bounds, time_saved
 
 
-def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, output=None):
+def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, output=None, reduce="marginal"):
     """Compare the final fdistribu snapshot of the baseline branch against the
     first compressed branch found, side by side, plus their difference.
 
     Looks for a "branch_baseline" directory and the first other "branch_*"
     directory under run_dir that has a final GYSELALIBXX_<iter>.h5 snapshot.
     Saves to output path if given, otherwise shows interactively.
+
+    reduce="marginal" (default) sums over the other two axes, matching what
+    the diagnostics (density, epot, ...) integrate over. A raw "slice" at a
+    fixed index can land in a low-density region where the reconstruction's
+    pointwise noise floor dominates the picture even when the field is
+    reconstructed well overall -- pass reduce="slice" to get that old behavior.
     """
     branch_dirs = sorted(
         d for d in glob.glob(os.path.join(run_dir, "branch_*"))
@@ -369,10 +396,11 @@ def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, 
     compressed_f, _, _ = _load_final_snapshot(compressed_dir, species=species)
 
     extent = _plane_extent(bounds, plane)
-    baseline_2d, axes_labels = _slice_2d(baseline_f, plane=plane, index=index)
-    compressed_2d, _ = _slice_2d(compressed_f, plane=plane, index=index)
+    baseline_2d, axes_labels = _slice_2d(baseline_f, plane=plane, index=index, reduce=reduce)
+    compressed_2d, _ = _slice_2d(compressed_f, plane=plane, index=index, reduce=reduce)
     diff_2d = compressed_2d - baseline_2d
 
+    kind = "marginal" if reduce == "marginal" else "slice"
     fig, axs = plt.subplots(1, 3, figsize=(3 * COMBINED_COL_WIDTH, COMBINED_ROW_HEIGHT))
     for ax, data, title in (
         (axs[0], baseline_2d, os.path.basename(baseline_dir)),
@@ -384,6 +412,7 @@ def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, 
         ax.set_xlabel(axes_labels[0])
         ax.set_ylabel(axes_labels[1])
         fig.colorbar(im, ax=ax, fraction=0.046)
+    fig.suptitle(f"Final snapshot ({kind} over the other two axes)")
     fig.tight_layout()
 
     if output:
@@ -406,29 +435,50 @@ def _find_rank_files(data_dir, it):
     return paths
 
 
-def _slice_2d(array_4d, plane="xvx", index=None):
-    """Reduce a (nx, ny, nvx, nvy) array to a 2D slice for plotting.
+def _slice_2d(array_4d, plane="xvx", index=None, reduce="slice"):
+    """Reduce a (nx, ny, nvx, nvy) array to a 2D field for plotting.
 
-    plane="xvx": fix (y, vy) at `index` (default: central indices), return (nx, nvx).
-    plane="xy": fix (vx, vy) at `index`, return (nx, ny).
-    plane="yvy": fix (x, vx) at `index`, return (ny, nvy).
-    plane="vxvy": fix (x, y) at `index`, return (nvx, nvy).
+    plane="xvx": collapse (y, vy), return (nx, nvx).
+    plane="xy": collapse (vx, vy), return (nx, ny).
+    plane="yvy": collapse (x, vx), return (ny, nvy).
+    plane="vxvy": collapse (x, y), return (nvx, nvy).
+
+    reduce="slice" (default): fix the collapsed axes at `index` (default:
+    central indices) -- cheap but arbitrary, and can land in a low-signal
+    region of phase space where reconstruction noise dominates visually.
+    reduce="marginal": sum over the collapsed axes instead, giving the
+    physically meaningful marginal distribution (comparable to what the
+    diagnostics -- density, epot, ... -- actually integrate over) and
+    averaging out pointwise reconstruction noise.
     """
     nx, ny, nvx, nvy = array_4d.shape
+    planes = {
+        "xvx": ((1, 3), (r"$x$", r"$v_x$")),
+        "xy": ((2, 3), (r"$x$", r"$y$")),
+        "yvy": ((0, 2), (r"$y$", r"$v_y$")),
+        "vxvy": ((0, 1), (r"$v_x$", r"$v_y$")),
+    }
+    if plane not in planes:
+        raise ValueError(f"Unknown plane {plane!r}, expected 'xvx', 'xy', 'yvy', or 'vxvy'")
+    collapse_axes, axes_labels = planes[plane]
+
+    if reduce == "marginal":
+        return array_4d.sum(axis=collapse_axes), axes_labels
+    elif reduce != "slice":
+        raise ValueError(f"Unknown reduce {reduce!r}, expected 'slice' or 'marginal'")
+
     if plane == "xvx":
         iy, ivy = index if index is not None else (ny // 2, nvy // 2)
-        return array_4d[:, iy, :, ivy], (r"$x$", r"$v_x$")
+        return array_4d[:, iy, :, ivy], axes_labels
     elif plane == "xy":
         ivx, ivy = index if index is not None else (nvx // 2, nvy // 2)
-        return array_4d[:, :, ivx, ivy], (r"$x$", r"$y$")
+        return array_4d[:, :, ivx, ivy], axes_labels
     elif plane == "yvy":
         ix, ivx = index if index is not None else (nx // 2, nvx // 2)
-        return array_4d[ix, :, ivx, :], (r"$y$", r"$v_y$")
+        return array_4d[ix, :, ivx, :], axes_labels
     elif plane == "vxvy":
         ix, iy = index if index is not None else (nx // 2, ny // 2)
-        return array_4d[ix, iy, :, :], (r"$v_x$", r"$v_y$")
-    else:
-        raise ValueError(f"Unknown plane {plane!r}, expected 'xvx', 'xy', 'yvy', or 'vxvy'")
+        return array_4d[ix, iy, :, :], axes_labels
 
 
 def evaluate_rank(data_dir, it, rank, species=0):
@@ -881,7 +931,7 @@ def parse_args():
     compare_parser.add_argument("--frob-inr", action="store_true")
     compare_parser.add_argument("--svd-spectrum", action="store_true")
     compare_parser.add_argument("--inr-loss", action="store_true")
-    compare_parser.add_argument("--cpu-time", action="store_true")
+    compare_parser.add_argument("--checkpoint-time", action="store_true")
     compare_parser.add_argument(
         "-o", "--output-dir", type=str, default=None,
         help="Output directory for figures (also used by --summary).",
@@ -945,8 +995,8 @@ def main():
             plot_frobenius(compression_cases, out_dir, filt="pod", name="frob_error_pod")
         if args.frob_inr:
             plot_frobenius(compression_cases, out_dir, filt="nn", name="frob_error_nn")
-        if args.cpu_time:
-            plot_cpu_time(compression_cases, out_dir)
+        if args.checkpoint_time:
+            plot_checkpoint_time(compression_cases, out_dir)
         if args.svd_spectrum:
             plot_svd_spectrum(data_dirs, compression_cases, out_dir)
         if args.inr_loss:

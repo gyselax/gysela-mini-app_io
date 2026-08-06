@@ -29,7 +29,7 @@ SpeciesInfo:
 
 Algorithm:
   deltat: 0.1
-  nbiter: 200
+  nbiter: 50
 
 compression:
   compression_period: 10
@@ -40,10 +40,11 @@ compression:
     clip_nonnegative: false
   NN:
     arch: "periodic_siren_deep_128"
-    lr: 1.0e-3
+    lr: 1.0e-3 # for offline compression, the lr decay is applied only when is_warm is true; the lr is kept constant for the cold-start phase
     max_iters: 2000
-    batch_size: 2000
+    batch_size: 50000
     lbfgs_iters: 50
+    lbfgs_chunk_size: 200000  # points per jax.lax.scan step in the L-BFGS phase (bounds peak GPU memory, independent of grid resolution)
 
 Output:
   nbiter_diag: 1  # diagnostics every N timesteps (must divide compression_period)

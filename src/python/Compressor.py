@@ -39,6 +39,7 @@ class Compressor:
 
     method_name = "placeholder"
     payload_extension = ".bin"
+    accepts_dask = False  # subclasses set this when they handle dask arrays natively
 
     def __init__(self, method_name: Optional[str] = None, **params: Any) -> None:
         self.method_name = method_name or self.method_name or self.__class__.__name__
@@ -117,10 +118,7 @@ class Compressor:
         self._last_compression_seconds = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        reconstructed = self.decompress_array(compressed)
         self._last_decompression_seconds = time.perf_counter() - t0
-
-        return compressed, reconstructed
 
     def compress_decompress_h5(
         self,
@@ -181,6 +179,23 @@ class Compressor:
             return None
         return os.path.getsize(path)
 
+    @staticmethod
+    def _error_metrics(f_original: np.ndarray, f_reconstructed: np.ndarray) -> Dict[str, float]:
+        """Reconstruction errors; subclasses override this to reduce lazily."""
+        f_original = np.asarray(f_original)
+        f_reconstructed = np.asarray(f_reconstructed)
+
+        diff = f_original - f_reconstructed
+        original_norm = np.linalg.norm(f_original.ravel())
+        diff_norm = np.linalg.norm(diff.ravel())
+
+        return {
+            "relative_l2_error": float(diff_norm / original_norm) if original_norm > 0.0 else np.nan,
+            "max_abs_error": float(np.max(np.abs(diff))) if diff.size else np.nan,
+            "mean_abs_error": float(np.mean(np.abs(diff))) if diff.size else np.nan,
+            "rmse": float(np.sqrt(np.mean(diff * diff))) if diff.size else np.nan,
+        }
+
     def compute_metrics(
         self,
         f_original: np.ndarray,
@@ -189,18 +204,6 @@ class Compressor:
         output_h5: Optional[str] = None,
         compressed_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        f_original = np.asarray(f_original)
-        f_reconstructed = np.asarray(f_reconstructed)
-
-        diff = f_original - f_reconstructed
-        original_norm = np.linalg.norm(f_original.ravel())
-        diff_norm = np.linalg.norm(diff.ravel())
-
-        relative_l2_error = diff_norm / original_norm if original_norm > 0.0 else np.nan
-        max_abs_error = np.max(np.abs(diff)) if diff.size else np.nan
-        mean_abs_error = np.mean(np.abs(diff)) if diff.size else np.nan
-        rmse = np.sqrt(np.mean(diff * diff)) if diff.size else np.nan
-
         original_size = self._safe_file_size(input_h5)
         reconstructed_size = self._safe_file_size(output_h5)
         compressed_size = self._safe_file_size(compressed_path)
@@ -219,10 +222,7 @@ class Compressor:
             "param_names": self.param_names,
             "params": self._json_safe(self.params),
             **{f"param_{key}": self._json_safe(value) for key, value in self.params.items()},
-            "relative_l2_error": float(relative_l2_error),
-            "max_abs_error": float(max_abs_error),
-            "mean_abs_error": float(mean_abs_error),
-            "rmse": float(rmse),
+            **self._error_metrics(f_original, f_reconstructed),
             "original_size": original_size,
             "reconstructed_size": reconstructed_size,
             "compressed_size": compressed_size,

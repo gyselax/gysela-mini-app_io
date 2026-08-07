@@ -205,12 +205,8 @@ deisa = Deisa()
 @deisa.register("fdistribu_offline")
 def compute_offline_compression(fdistribu_chunks):
     timestep = int(fdistribu_chunks[0].t)
-    fdistribu_global = np.array(fdistribu_chunks[0])
 
-    compression_diagnostics.run_offline_compression_on_global_array(fdistribu_global, timestep)
-
-    deisa.set("fdistribu_offline_done", True, timestep=timestep)
-
+    compression_diagnostics.run_offline_compression_on_global_array(fdistribu_chunks[0], timestep)
 
 @deisa.register("fdistribu_reduced", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
 def compute_reduced_diagnostics(reduced, deltat, mx, my, mvx, mvy):

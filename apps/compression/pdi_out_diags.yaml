@@ -187,20 +187,6 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 300.0
-              done = False
-              while not done:
-                try:
-                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
-                except KeyError:
-                  done = False
-                if not done:
-                  if time.time() > deadline:
-                    raise RuntimeError(
-                      f"Timed out waiting for offline compression feedback at iter {timestep}"
-                    )
-                  time.sleep(0.05)
-              pdi.event("read_compressed_fdistribu")
 
           if timestep % int(nbstep_diag) == 0:
             if diag_mode == 1:
@@ -253,20 +239,6 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 60.0
-              done = False
-              while not done:
-                try:
-                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
-                except KeyError:
-                  done = False
-                if not done:
-                  if time.time() > deadline:
-                    raise RuntimeError(
-                      f"Timed out waiting for offline compression feedback at iter {timestep}"
-                    )
-                  time.sleep(0.05)
-              pdi.event("read_compressed_fdistribu")
 
           if diag_mode == 1:
             # Reduced diagnostics: local partial sums, finished by the fdistribu_reduced callback
@@ -347,21 +319,5 @@ plugins:
       on_event: [initial_state]
       collision_policy: replace_and_warn
       write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
-    - file: 'GYSELALIBXX_${iter_saved:05}.h5'
-      communicator: $MPI_COMM_WORLD
-      on_event: [last_iteration]
-      collision_policy: replace_and_warn
-      datasets:
-        fdistribu:
-          type: array
-          subtype: double
-          size: [ '$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]' ]
-      write:
-        time_saved: $absolute_time
-        fdistribu:
-          dataset_selection:
-            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
-            start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
-        electrostatic_potential: ~
   #trace: ~
 

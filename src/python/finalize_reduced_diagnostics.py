@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Post hoc finalisation of the per-rank partial diagnostics written with GYS_DIAG_MODE=2."""
 
+import time
 import argparse
 import csv
 from collections import defaultdict

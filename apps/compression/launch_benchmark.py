@@ -16,7 +16,7 @@ import csv
 # Compression params / names
 # ------------------------------------------------------------------
 from evaluate_compression import plot_diags, plot_final_snapshot_comparison
-from compression_methods.neural_network import AVAILABLE_INR_ARCHS
+from compression_methods.neural_network import AVAILABLE_INR_ARCHS, AVAILABLE_POLISH_OPTIMIZERS
 
 
 GYS_COMPRESS_BIN = "./build/apps/compression/gys_compress"
@@ -207,12 +207,26 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--arch-nn", 
-        type=str, 
+        "--arch-nn",
+        type=str,
         default="periodic_siren_deep_128",
         dest="arch_nn",
         choices=AVAILABLE_INR_ARCHS,
         help="INR architecture (if --compression NN)"
+    )
+
+    parser.add_argument(
+        "--polish-optimizer-nn",
+        type=str,
+        default=None,
+        dest="polish_optimizer_nn",
+        choices=AVAILABLE_POLISH_OPTIMIZERS,
+        help=(
+            "Optimizer for the polish phase that runs AFTER the ADAM warmup "
+            "(if --compression NN): 'lbfgs' (default, any arch) or 'gauss_newton' "
+            "(faster, only usable with '_small_32' architectures). Falls back to "
+            "params yaml's compression.NN.polish_optimizer, then 'lbfgs', if not given."
+        ),
     )
 
     parser.add_argument(
@@ -609,7 +623,8 @@ def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression
                                    mesh_kwargs=None, method_override=None, n_workers=1):
     branch_name = _offline_branch_name(method_override)
     dir_offline = os.path.join(run_dir, branch_name)
-    yaml_offline = os.path.join(run_dir, f"config_{branch_name}.yaml")
+    config_tag = branch_name.replace("/", "_")
+    yaml_offline = os.path.join(run_dir, f"config_{config_tag}.yaml")
 
     create_yaml_override(
         SOURCE_GYSELA_YAML, 
@@ -679,12 +694,23 @@ def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_
     return dir_online
 
 def _offline_branch_name(method_override):
+    """Relative path (under run_dir) of an offline-compressed branch's work dir.
+
+    Nested as NN/<arch>/<polish_optimizer> or POD/r<n_components> so that runs
+    for different architectures/optimizers never share a directory (and thus
+    never silently overwrite each other's checkpoints, loss curves, etc.).
+    """
     if not method_override:
         return "branch_offline_compressed"
     if method_override["class"] == "PCA":
-        return f"branch_offline_compressed_POD_r{method_override['params']['n_components']}"
+        return f"POD/r{method_override['params']['n_components']}"
     if method_override["class"] == "NeuralNetwork":
-        return f"branch_offline_compressed_NN_{method_override['params']['arch']}"
+        arch = method_override['params']['arch']
+        polish_optimizer = method_override['params'].get('polish_optimizer', 'lbfgs')
+        # "polish_" prefix: ADAM always runs first, this folder name is only the
+        # optimizer used for the polish phase after it -- a bare "gauss_newton"/
+        # "lbfgs" folder name would wrongly suggest it's the only optimizer used.
+        return f"NN/{arch}/polish_{polish_optimizer}"
     return "branch_offline_compressed"
 
 
@@ -698,11 +724,14 @@ def _collect_online_compression_events(work_dir):
 
 
 def compare_results(run_dir):
-    diag_files = []
-    for entry in sorted(os.listdir(run_dir)):
-        csv_path = os.path.join(run_dir, entry, "diagnostics.csv")
-        if os.path.exists(csv_path):
-            diag_files.append(csv_path)
+    # Branches now live under nested dirs (NN/<arch>/<optimizer>, POD/r<n>),
+    # not just directly under run_dir, so this has to walk recursively.
+    diag_files = sorted(
+        (os.path.join(dirpath, "diagnostics.csv")
+         for dirpath, _, filenames in os.walk(run_dir)
+         if "diagnostics.csv" in filenames),
+        key=lambda p: (os.path.basename(os.path.dirname(p)) != "branch_baseline", p),
+    )
 
     if not diag_files:
         print("\nNo diagnostics.csv files found — skipping comparison plot.")
@@ -711,8 +740,9 @@ def compare_results(run_dir):
     output = os.path.join(run_dir, "diags_comparison.png")
     plot_diags(diag_files, output=output)
 
-    snapshot_output = os.path.join(run_dir, "final_snapshot_comparison.png")
-    plot_final_snapshot_comparison(run_dir, output=snapshot_output)
+    # One final_snapshot_comparison.png per compressed branch, saved inside
+    # that branch's own directory (see plot_final_snapshot_comparison).
+    plot_final_snapshot_comparison(run_dir)
 
 
 # ------------------------------------------------------------------
@@ -874,8 +904,13 @@ def run_pipeline(args):
                 "lr": float(nn_cfg.get("lr", 1e-3)),
                 "max_iters": int(nn_cfg.get("max_iters", 2000)),
                 "batch_size": int(nn_cfg.get("batch_size", 2000)),
+                "polish_optimizer": args.polish_optimizer_nn if getattr(args, 'polish_optimizer_nn', None) else nn_cfg.get("polish_optimizer", "lbfgs"),
                 "lbfgs_iters": int(nn_cfg.get("lbfgs_iters", 50)),
                 "lbfgs_chunk_size": int(nn_cfg.get("lbfgs_chunk_size", 200_000)),
+                "gn_iters": int(nn_cfg.get("gn_iters", 50)),
+                "gn_n_map": int(nn_cfg.get("gn_n_map", 8000)),
+                "gn_init_damping": float(nn_cfg.get("gn_init_damping", 1e-2)),
+                "gn_chunk_size": int(nn_cfg.get("gn_chunk_size", 2000)),
             }
         }
 

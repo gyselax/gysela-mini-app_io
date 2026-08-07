@@ -96,8 +96,29 @@ def load_compression_events(data_dir):
                     pass
     return iters, data 
 
+def _case_subdir(data_dir):
+    """Path components identifying a single NN/<arch>/<optimizer> or POD/r<n>
+    case within a results_<case_name> dir
+    """
+    parts = Path(data_dir).resolve().parts
+    for marker in ("NN", "POD"):
+        if marker in parts:
+            idx = parts.index(marker)
+            return parts[idx + 1:]
+    return ()
+
+def _case_out_dir(data_dir, out_dir):
+    subdir = out_dir.joinpath(*_case_subdir(data_dir))
+    subdir.mkdir(parents=True, exist_ok=True)
+    return subdir
+
 def case_label(csv_path):
     p = Path(csv_path).resolve()
+    parts = p.parent.parts
+    for marker in ("NN", "POD"):
+        if marker in parts:
+            idx = parts.index(marker)
+            return "_".join(parts[idx:])
     return p.parent.name.replace("branch_","")
 
 def save_fig(fig, out_path):
@@ -188,7 +209,7 @@ def plot_physical(cases, quantities, out_dir):
 def plot_frobenius(compression_cases, out_dir, filt=None, name="frob_error_comparison"):
     fig, ax = plt.subplots(figsize=(9, 5.5))
     plotted = False
-    for label, iters, data in compression_cases:
+    for label, data_dir, iters, data in compression_cases:
         if filt and filt.lower() not in label.lower():
             continue
         if not data.get("relative_l2_error"):
@@ -214,7 +235,7 @@ def plot_checkpoint_time(compression_cases, out_dir):
     top), annotated with that checkpoint's time in seconds and minutes, plus
     the run's total time annotated on the figure.
     """
-    for label, iters, data in compression_cases:
+    for label, data_dir, iters, data in compression_cases:
         comp_t = np.asarray(data.get("compression_seconds", []), dtype=float)
         decomp_t = np.asarray(data.get("decompression_seconds", []), dtype=float)
         if comp_t.size == 0 and decomp_t.size == 0:
@@ -254,7 +275,7 @@ def plot_checkpoint_time(compression_cases, out_dir):
         ax.legend(loc="upper left")
         ax.grid(True, axis="y", alpha=0.4)
         fig.tight_layout()
-        save_fig(fig, out_dir / f"checkpoint_time_{label}")
+        save_fig(fig, _case_out_dir(data_dir, out_dir) / f"checkpoint_time_{label}")
         plt.close(fig)
 
 def plot_svd_spectrum(data_dirs, compression_cases, out_dir):
@@ -262,7 +283,7 @@ def plot_svd_spectrum(data_dirs, compression_cases, out_dir):
     found = False
     rank_by_dir = {
         Path(dd): int(data["param_n_components"][0])
-        for (label, _, data), dd in zip(compression_cases, data_dirs)
+        for (label, _, _, data), dd in zip(compression_cases, data_dirs)
         if "param_n_components" in data and data["param_n_components"]
     }
     
@@ -304,17 +325,19 @@ def plot_inr_loss(data_dirs, out_dir):
         loss_dir = Path(data_dir) / "loss_histories"
         if not loss_dir.exists():
             continue
+        subdir = _case_out_dir(data_dir, out_dir)
+        optimizer_label = "Gauss-Newton" if "gauss_newton" in str(Path(data_dir)) else "L-BFGS"
         for fpath in sorted(loss_dir.glob("loss_iter*.npy")):
             found = True
             hist = np.load(fpath)
             fig, ax = plt.subplots(figsize=(7, 5))
             ax.semilogy(hist, color="tab:blue", linewidth=2)
-            ax.set_xlabel("Optimization step (ADAM then L-BFGS)")
+            ax.set_xlabel(f"Optimization step (ADAM then {optimizer_label})")
             ax.set_ylabel("MSE loss")
             ax.set_title(fpath.stem)
             ax.grid(True, which="both", alpha=0.4)
             fig.tight_layout()
-            save_fig(fig, out_dir / fpath.stem)
+            save_fig(fig, subdir / fpath.stem)
             plt.close(fig)
     if not found:
         print("No loss_histories/ found for --inr-loss.")
@@ -366,13 +389,9 @@ def _load_final_snapshot(branch_dir, species=0):
     return fdistribu, bounds, time_saved
 
 
-def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, output=None, reduce="marginal"):
-    """Compare the final fdistribu snapshot of the baseline branch against the
-    first compressed branch found, side by side, plus their difference.
-
-    Looks for a "branch_baseline" directory and the first other "branch_*"
-    directory under run_dir that has a final GYSELALIBXX_<iter>.h5 snapshot.
-    Saves to output path if given, otherwise shows interactively.
+def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, reduce="marginal"):
+    """Compare the final fdistribu snapshot of the baseline branch against every
+    compressed branch found under run_dir, side by side, plus their difference.
 
     reduce="marginal" (default) sums over the other two axes, matching what
     the diagnostics (density, epot, ...) integrate over. A raw "slice" at a
@@ -380,48 +399,46 @@ def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, 
     pointwise noise floor dominates the picture even when the field is
     reconstructed well overall -- pass reduce="slice" to get that old behavior.
     """
-    branch_dirs = sorted(
-        d for d in glob.glob(os.path.join(run_dir, "branch_*"))
-        if os.path.isdir(d) and glob.glob(os.path.join(d, "GYSELALIBXX_[0-9]*.h5"))
-    )
+    branch_dirs = sorted({
+        str(p.parent) for p in Path(run_dir).rglob("GYSELALIBXX_[0-9]*.h5")
+    })
     baseline_dir = next((d for d in branch_dirs if os.path.basename(d) == "branch_baseline"), None)
     other_dirs = [d for d in branch_dirs if d != baseline_dir]
 
     if baseline_dir is None or not other_dirs:
         print("\nMissing baseline or compressed final snapshot -- skipping snapshot comparison plot.")
         return
-    compressed_dir = other_dirs[0]
 
     baseline_f, bounds, _ = _load_final_snapshot(baseline_dir, species=species)
-    compressed_f, _, _ = _load_final_snapshot(compressed_dir, species=species)
-
+    baseline_label = case_label(os.path.join(baseline_dir, "diagnostics.csv"))
     extent = _plane_extent(bounds, plane)
     baseline_2d, axes_labels = _slice_2d(baseline_f, plane=plane, index=index, reduce=reduce)
-    compressed_2d, _ = _slice_2d(compressed_f, plane=plane, index=index, reduce=reduce)
-    diff_2d = compressed_2d - baseline_2d
-
     kind = "marginal" if reduce == "marginal" else "slice"
-    fig, axs = plt.subplots(1, 3, figsize=(3 * COMBINED_COL_WIDTH, COMBINED_ROW_HEIGHT))
-    for ax, data, title in (
-        (axs[0], baseline_2d, os.path.basename(baseline_dir)),
-        (axs[1], compressed_2d, os.path.basename(compressed_dir)),
-        (axs[2], diff_2d, "difference"),
-    ):
-        im = ax.imshow(np.asarray(data).T, origin="lower", aspect="auto", extent=extent)
-        ax.set_title(title)
-        ax.set_xlabel(axes_labels[0])
-        ax.set_ylabel(axes_labels[1])
-        fig.colorbar(im, ax=ax, fraction=0.046)
-    fig.suptitle(f"Final snapshot ({kind} over the other two axes)")
-    fig.tight_layout()
 
-    if output:
+    for compressed_dir in other_dirs:
+        compressed_f, _, _ = _load_final_snapshot(compressed_dir, species=species)
+        compressed_label = case_label(os.path.join(compressed_dir, "diagnostics.csv"))
+        compressed_2d, _ = _slice_2d(compressed_f, plane=plane, index=index, reduce=reduce)
+        diff_2d = compressed_2d - baseline_2d
+
+        fig, axs = plt.subplots(1, 3, figsize=(3 * COMBINED_COL_WIDTH, COMBINED_ROW_HEIGHT))
+        for ax, data, title in (
+            (axs[0], baseline_2d, baseline_label),
+            (axs[1], compressed_2d, compressed_label),
+            (axs[2], diff_2d, "difference"),
+        ):
+            im = ax.imshow(np.asarray(data).T, origin="lower", aspect="auto", extent=extent)
+            ax.set_title(title)
+            ax.set_xlabel(axes_labels[0])
+            ax.set_ylabel(axes_labels[1])
+            fig.colorbar(im, ax=ax, fraction=0.046)
+        fig.suptitle(f"Final snapshot ({kind} over the other two axes)")
+        fig.tight_layout()
+
+        output = os.path.join(compressed_dir, "final_snapshot_comparison.png")
         fig.savefig(output, bbox_inches="tight")
         print(f"Plot written to: {output}")
-    else:
-        plt.show()
-
-    plt.close(fig)
+        plt.close(fig)
 
 
 # Online (in-situ) neural-network evaluation
@@ -965,13 +982,15 @@ def main():
     elif args.command == "compare":
         quantities = [q for q in PHYSICAL_QUANTITIES if getattr(args, q.replace("-", "_"))]
 
-        physical_cases, compression_cases, data_dirs = [], [], []
+        physical_cases, compression_cases, data_dirs, found_params = [], [], [], []
+        missing = []
         for p in args.params:
             p = Path(p)
             if not p.exists():
-                print(f"Warning: {p} not found, skipping.")
+                missing.append(p)
                 continue
 
+            found_params.append(str(p))
             data = load_diags(p)
             times = data["time"]
             label = case_label(p)
@@ -980,25 +999,44 @@ def main():
             data_dirs.append(data_dir)
             ce = load_compression_events(data_dir)
             if ce is not None:
-                compression_cases.append((label, ce[0], ce[1]))
+                compression_cases.append((label, data_dir, ce[0], ce[1]))
+
+        if missing:
+            # Loud and impossible to miss: a silently-skipped --params path
+            # means a case (e.g. one optimizer/architecture) quietly vanishes
+            # from every comparison plot and legend below, with the figure
+            # still looking "done" -- this has already happened once (a path
+            # left over from before a directory rename).
+            print(
+                "\n" + "!" * 78 + "\n"
+                f"WARNING: {len(missing)} of {len(args.params)} --params path(s) do NOT exist "
+                "and will be MISSING from every plot below:\n"
+                + "\n".join(f"  - {p}" for p in missing)
+                + "\nCheck for stale/renamed paths.\n" + "!" * 78 + "\n"
+            )
 
         out_dir = resolve_out_dir(args)
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        needs_global = args.summary or quantities or args.frob or args.frob_pod or args.frob_inr or args.svd_spectrum
+        global_dir = out_dir / "global"
+        if needs_global:
+            global_dir.mkdir(parents=True, exist_ok=True)
+
         if args.summary:
-            plot_diags(args.params, output=out_dir / "diags_comparison.png")
+            plot_diags(found_params, output=global_dir / "diags_comparison.png")
         if quantities:
-            plot_physical(physical_cases, quantities, out_dir)
+            plot_physical(physical_cases, quantities, global_dir)
         if args.frob:
-            plot_frobenius(compression_cases, out_dir)
+            plot_frobenius(compression_cases, global_dir)
         if args.frob_pod:
-            plot_frobenius(compression_cases, out_dir, filt="pod", name="frob_error_pod")
+            plot_frobenius(compression_cases, global_dir, filt="pod", name="frob_error_pod")
         if args.frob_inr:
-            plot_frobenius(compression_cases, out_dir, filt="nn", name="frob_error_nn")
+            plot_frobenius(compression_cases, global_dir, filt="nn", name="frob_error_nn")
         if args.checkpoint_time:
             plot_checkpoint_time(compression_cases, out_dir)
         if args.svd_spectrum:
-            plot_svd_spectrum(data_dirs, compression_cases, out_dir)
+            plot_svd_spectrum(data_dirs, compression_cases, global_dir)
         if args.inr_loss:
             plot_inr_loss(data_dirs, out_dir)
 

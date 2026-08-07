@@ -162,6 +162,9 @@ AVAILABLE_INR_ARCHS = [
     "periodic_fourier_mlp_small_32",
 ]
 
+# Choices for the polish-phase optimizer
+AVAILABLE_POLISH_OPTIMIZERS = ["lbfgs", "gauss_newton"]
+
 def get_inr_model(arch: str, key: jax.Array) -> eqx.Module:
     """Instantiate an INR architecture"""
     if arch == "periodic_siren_deep_128": return PeriodicSIRENScimbaINR([128]*5, 30.0, key)
@@ -236,6 +239,162 @@ def make_chunked_losses_function(chunk_size: int):
 
     return _chunked_losses_function
 
+# Chunked Gauss-Newton normal equations: J^T J, J^T r and sum(r^2) are all
+# plain sums of independent per-point contributions, so accumulating them
+# chunk by chunk (jax.lax.scan, mirroring make_chunked_losses_function above)
+# is mathematically exact -- not an approximation of the unchunked result.
+def _chunked_gn_normal_equations(residual_fn, p, coords, target, chunk_size):
+    """Peak-memory-bounded (J^T J, J^T r, mean(r^2)) for one Gauss-Newton batch.
+
+    jax.jacfwd(residual_fn) materializes O(chunk_size x n_params x hidden_width)
+    intermediate activations for whatever batch it's handed -- by far the
+    dominant memory cost of Gauss-Newton, much bigger than the O(n_params^2)
+    J^T J matrix itself. Computing it chunk_size points at a time instead of
+    n_map points at once bounds peak memory by chunk_size independent of
+    n_map, letting n_map be set purely for a well-posed batch (n_map >>
+    n_params) rather than for whatever fits in GPU memory that run -- the
+    same role lbfgs_chunk_size already plays for L-BFGS's full-grid loss.
+    """
+    n = coords.shape[0]
+    n_params = p.shape[0]
+    n_chunks = -(-n // chunk_size)  # ceil division, static python int
+    n_pad = n_chunks * chunk_size - n
+
+    if n_pad > 0:
+        pad_c = jnp.zeros((n_pad,) + coords.shape[1:], dtype=coords.dtype)
+        pad_t = jnp.zeros((n_pad,) + target.shape[1:], dtype=target.dtype)
+        coords_p = jnp.concatenate([coords, pad_c], axis=0)
+        target_p = jnp.concatenate([target, pad_t], axis=0)
+        mask = jnp.concatenate([
+            jnp.ones((n,), dtype=coords.dtype),
+            jnp.zeros((n_pad,), dtype=coords.dtype),
+        ])
+    else:
+        coords_p, target_p, mask = coords, target, jnp.ones((n,), dtype=coords.dtype)
+
+    coords_c = coords_p.reshape((n_chunks, chunk_size) + coords.shape[1:])
+    target_c = target_p.reshape((n_chunks, chunk_size) + target.shape[1:])
+    mask_c = mask.reshape((n_chunks, chunk_size))
+
+    def masked_residual(p_, c_chunk, t_chunk, m_chunk):
+        # Zeroing padded rows here (rather than masking coords/target directly)
+        # also zeroes their row of J = d(residual)/dp under jacfwd, via the
+        # chain rule d(m_i * r_i)/dp = m_i * dr_i/dp -- so padded points
+        # contribute exactly zero to JTJ/grad/sse below, not an approximation.
+        return residual_fn(p_, c_chunk, t_chunk) * m_chunk
+
+    def chunk_step(carry, xs):
+        JTJ_acc, grad_acc, sse_acc = carry
+        c_chunk, t_chunk, m_chunk = xs
+        r_chunk = masked_residual(p, c_chunk, t_chunk, m_chunk)
+        J_chunk = jax.jacfwd(masked_residual)(p, c_chunk, t_chunk, m_chunk)
+        return (
+            JTJ_acc + J_chunk.T @ J_chunk,
+            grad_acc + J_chunk.T @ r_chunk,
+            sse_acc + jnp.sum(r_chunk ** 2),
+        ), None
+
+    init = (
+        jnp.zeros((n_params, n_params), dtype=p.dtype),
+        jnp.zeros((n_params,), dtype=p.dtype),
+        jnp.zeros((), dtype=p.dtype),
+    )
+    (JTJ, grad, sse), _ = jax.lax.scan(chunk_step, init, (coords_c, target_c, mask_c))
+    return JTJ, grad, sse / n
+
+
+# Gauss-Newton polish optimizer (alternative to L-BFGS, used after ADAM warmup)
+def train_map_gn(
+    n_map: int,
+    make_data,
+    params: eqx.Module,
+    n_iterations: int = 50,
+    init_damping: float = 1e-2,
+    chunk_size: int = 2000,
+) -> tuple[eqx.Module, jnp.ndarray]:
+    """Fit `params` (an INR model) to data produced by `make_data(n_map, key) ->
+    (coords, targets, new_key)`, via damped Gauss-Newton.
+
+    chunk_size bounds the peak memory of the J^T J / J^T r computation (see
+    _chunked_gn_normal_equations) independent of n_map -- so n_map can be set
+    purely for a well-posed batch (n_map >> n_params, needed for Gauss-Newton
+    to converge reliably instead of overfitting a too-small random batch)
+    without needing to fit the whole batch's Jacobian in GPU memory at once.
+    chunk_size itself still needs to leave room for one chunk's Jacobian
+    alongside whatever else shares the GPU (e.g. the concurrently-running
+    physics simulation) -- 2000 is the value validated to fit under that
+    contention for periodic_siren_small_32 (~2369 params).
+
+    IMPORTANT -- only tractable on small architectures regardless of
+    chunk_size: every iteration forms the dense Gauss-Newton matrix J^T J
+    (size n_params x n_params), independent of batch size or chunking. For
+    periodic_siren_deep_128 (~67k params) this alone needs ~36GB and reliably
+    OOMs, confirmed even with a batch as small as n_map=100 -- do not use
+    polish_optimizer="gauss_newton" with the "_deep_128" architectures.
+
+    Returns (best_model, loss_history), loss_history of shape (n_iterations,).
+    best_model corresponds to the LOWEST loss encountered across all
+    n_iterations
+    """
+    key = jax.random.PRNGKey(42)
+    flat_params, unflatten = ravel_pytree(params)
+
+    def residual_fn(p, coords, t):
+        pred = jax.vmap(unflatten(p))(coords)
+        return (pred - t).reshape(-1)
+
+    # carry: (curr_p, damping, key, best_p, best_loss)
+    initial_state = (flat_params, init_damping, key, flat_params, jnp.inf)
+
+    def step_fn(state, _):
+        curr_p, damping, step_key, best_p, best_loss = state
+        coords_train, target, step_key = make_data(n_map, step_key)
+        JTJ, grad, current_loss = _chunked_gn_normal_equations(
+            residual_fn, curr_p, coords_train, target, chunk_size
+        )
+        num_params = JTJ.shape[0]
+        step = jnp.linalg.solve(JTJ + damping * jnp.eye(num_params), -grad)
+        direction_derivative = jnp.dot(grad, step)
+
+        def ls_cond(ls_state):
+            alpha, count, _, loss_cand = ls_state
+            return (loss_cand > current_loss + 1e-4 * alpha * direction_derivative) & (
+                count < 8
+            )
+
+        def ls_body(ls_state):
+            alpha, count, _, _ = ls_state
+            new_alpha = alpha * 0.5
+            new_p = curr_p + new_alpha * step
+            new_loss = jnp.mean(residual_fn(new_p, coords_train, target) ** 2)
+            return new_alpha, count + 1, new_p, new_loss
+
+        init_p_cand = curr_p + 1.0 * step
+        init_l_cand = jnp.mean(residual_fn(init_p_cand, coords_train, target) ** 2)
+        _, ls_count, final_p, final_loss = jax.lax.while_loop(
+            ls_cond, ls_body, (1.0, 0, init_p_cand, init_l_cand)
+        )
+        new_damping = jnp.where(
+            ls_count >= 8,
+            damping * 10.0,
+            jnp.where(ls_count == 0, damping / 2.0, damping),
+        )
+        new_damping = jnp.clip(new_damping, 1e-5, 1e2)
+        success = final_loss < current_loss
+        actual_p = jnp.where(success, final_p, curr_p)
+        actual_loss = jnp.where(success, final_loss, current_loss)
+
+        is_best = actual_loss < best_loss
+        new_best_p = jnp.where(is_best, actual_p, best_p)
+        new_best_loss = jnp.where(is_best, actual_loss, best_loss)
+
+        return (actual_p, new_damping, step_key, new_best_p, new_best_loss), actual_loss
+
+    xs = jnp.arange(n_iterations)
+    (_, _, _, best_p, _), loss_hist = jax.lax.scan(step_fn, initial_state, xs)
+    return unflatten(best_p), loss_hist
+
+
 # Reconstruction: unlike training, this always evaluates the *entire* grid, so
 # (unlike batch_size, which only bounds training mini-batches) it needs its own
 # chunking to keep peak memory bounded.
@@ -282,8 +441,13 @@ class NeuralNetworkCompressor(Compressor):
         lr_decay_alpha: float = 0.01,
         max_iters: int = 2000,
         batch_size: int = 2000,
+        polish_optimizer: str = "lbfgs",
         lbfgs_iters: int = 50,
         lbfgs_chunk_size: int = 200_000,
+        gn_iters: int = 50,
+        gn_n_map: int = 8000,
+        gn_init_damping: float = 1e-2,
+        gn_chunk_size: int = 2000,
         clear_cache_every: int = 5,
         threshold: float = 1e-8,
         seed: int = 42,
@@ -292,19 +456,35 @@ class NeuralNetworkCompressor(Compressor):
     ):
         if arch not in AVAILABLE_INR_ARCHS:
             raise ValueError(f"Unknown arch {arch!r}. Available: {AVAILABLE_INR_ARCHS}")
-            
+        if polish_optimizer not in AVAILABLE_POLISH_OPTIMIZERS:
+            raise ValueError(
+                f"Unknown polish_optimizer {polish_optimizer!r}. Available: {AVAILABLE_POLISH_OPTIMIZERS}"
+            )
+        if polish_optimizer == "gauss_newton" and "deep_128" in arch:
+            raise ValueError(
+                f"polish_optimizer='gauss_newton' is not usable with arch={arch!r}: its dense "
+                "Gauss-Newton matrix (n_params x n_params) needs ~36G  and reliably OOMs "
+                "on this architecture, independent of batch size (gn_n_map). Use a "
+                "'_small_32' architecture, or polish_optimizer='lbfgs' instead."
+            )
+
         self.x_min, self.x_max = float(x_min), float(x_max)
         self.y_min, self.y_max = float(y_min), float(y_max)
         self.vx_min, self.vx_max = float(vx_min), float(vx_max)
         self.vy_min, self.vy_max = float(vy_min), float(vy_max)
- 
+
         self.arch = arch
         self.lr = float(lr)
         self.lr_decay_alpha = float(lr_decay_alpha)
         self.max_iters = int(max_iters)
         self.batch_size = int(batch_size)
+        self.polish_optimizer = polish_optimizer
         self.lbfgs_iters = int(lbfgs_iters)
         self.lbfgs_chunk_size = int(lbfgs_chunk_size)
+        self.gn_iters = int(gn_iters)
+        self.gn_n_map = int(gn_n_map)
+        self.gn_init_damping = float(gn_init_damping)
+        self.gn_chunk_size = int(gn_chunk_size)
         # Built once and reused across every _fit_on_species call (all species,
         # all timesteps): same python function object each time -> jax.jit's
         # compilation cache is hit after the first call instead of retracing.
@@ -312,12 +492,12 @@ class NeuralNetworkCompressor(Compressor):
 
         self.clear_cache_every = int(clear_cache_every)
         self._n_compress_calls = 0
-        
+
         self.threshold = float(threshold)
         self.seed = int(seed)
         self.warm_start_payload = warm_start_payload
         self.verbose = bool(verbose)
-        
+
         super().__init__(
             method_name=self.method_name,
             arch=self.arch,
@@ -325,8 +505,13 @@ class NeuralNetworkCompressor(Compressor):
             lr_decay_alpha=self.lr_decay_alpha,
             max_iters=self.max_iters,
             batch_size=self.batch_size,
+            polish_optimizer=self.polish_optimizer,
             lbfgs_iters=self.lbfgs_iters,
             lbfgs_chunk_size=self.lbfgs_chunk_size,
+            gn_iters=self.gn_iters,
+            gn_n_map=self.gn_n_map,
+            gn_init_damping=self.gn_init_damping,
+            gn_chunk_size=self.gn_chunk_size,
         )
         
         self.original_shape = None
@@ -431,27 +616,57 @@ class NeuralNetworkCompressor(Compressor):
                 pbar.write(f"  [INR/{self.arch}][ADAM] early convergence at iter {i}")
                 break
 
-        #Phase 2: L-BFGS, full-batch (chunked + checkpointed to bound peak memory
+        #Phase 2: polish -- L-BFGS (full-batch) or Gauss-Newton (mini-batch), per self.polish_optimizer
         #Resumes from ADAM's best point (best_model), not wherever ADAM happened to end up
         model = best_model
-        full_batch = (inputs, targets)
-        lbfgs_opt = ScimbaLBfgs(model, self._chunked_losses_fn)
-        pbar = _training_progress(self.lbfgs_iters, f"[INR/{self.arch}][L-BFGS]", self.verbose)
-        for i in pbar:
-            loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
-            loss_val = float(loss_dict["total"])
-            loss_history.append(loss_val)
-            pbar.set_postfix(loss=f"{loss_val:.2e}")
 
-            if loss_val < best_loss:
-                best_model, best_loss = model, loss_val
-            
-            if self.verbose and i % 10 == 0:
-                print(f"  [INR/{self.arch}][L-BFGS/{tag}] iter {i:4d} - loss: {loss_val:.2e}")
+        if self.polish_optimizer == "lbfgs":
+            full_batch = (inputs, targets)
+            lbfgs_opt = ScimbaLBfgs(model, self._chunked_losses_fn)
+            pbar = _training_progress(self.lbfgs_iters, f"[INR/{self.arch}][L-BFGS]", self.verbose)
+            for i in pbar:
+                loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
+                loss_val = float(loss_dict["total"])
+                loss_history.append(loss_val)
+                pbar.set_postfix(loss=f"{loss_val:.2e}")
 
-            if loss_val < self.threshold:
-                pbar.write(f"  [INR/{self.arch}][L-BFGS] convergence at iter {i}")
-                break
+                if loss_val < best_loss:
+                    best_model, best_loss = model, loss_val
+
+                if self.verbose and i % 10 == 0:
+                    print(f"  [INR/{self.arch}][L-BFGS/{tag}] iter {i:4d} - loss: {loss_val:.2e}")
+
+                if loss_val < self.threshold:
+                    pbar.write(f"  [INR/{self.arch}][L-BFGS] convergence at iter {i}")
+                    break
+
+        else:  # "gauss_newton"
+            def make_data(n_map, k):
+                k, subkey = jax.random.split(k)
+                idx = jax.random.choice(subkey, total_points, shape=(n_map,), replace=(n_map > total_points))
+                return inputs[idx], targets[idx], k
+
+            if self.verbose:
+                print(f"  [INR/{self.arch}][GaussNewton/{tag}] running {self.gn_iters} iterations "
+                      f"(n_map={self.gn_n_map}, chunk_size={self.gn_chunk_size})...")
+            # model returned here is already train_map_gn's own best-seen iterate
+            # (not necessarily its last), so best_gn_loss below (the historical
+            # min of gn_loss_hist) is exactly the loss of that returned model.
+            model, gn_loss_hist = train_map_gn(
+                self.gn_n_map, make_data, model,
+                n_iterations=self.gn_iters, init_damping=self.gn_init_damping,
+                chunk_size=self.gn_chunk_size,
+            )
+            gn_loss_hist = np.asarray(gn_loss_hist)
+            loss_history.extend(gn_loss_hist.tolist())
+
+            best_gn_loss = float(gn_loss_hist.min()) if gn_loss_hist.size else best_loss
+            if best_gn_loss < best_loss:
+                best_model, best_loss = model, best_gn_loss
+
+            if self.verbose:
+                print(f"  [INR/{self.arch}][GaussNewton/{tag}] done, best loss {best_gn_loss:.2e} "
+                      f"(last loss {gn_loss_hist[-1]:.2e})")
 
         return best_model, jnp.array(loss_history)
     

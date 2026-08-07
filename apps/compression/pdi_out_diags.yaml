@@ -175,20 +175,6 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 300.0
-              done = False
-              while not done:
-                try:
-                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
-                except KeyError:
-                  done = False
-                if not done:
-                  if time.time() > deadline:
-                    raise RuntimeError(
-                      f"Timed out waiting for offline compression feedback at iter {timestep}"
-                    )
-                  time.sleep(0.05)
-              pdi.event("read_compressed_fdistribu")
 
           if timestep % int(nbstep_diag) == 0:
             if diag_mode == 1:
@@ -237,20 +223,6 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 60.0
-              done = False
-              while not done:
-                try:
-                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
-                except KeyError:
-                  done = False
-                if not done:
-                  if time.time() > deadline:
-                    raise RuntimeError(
-                      f"Timed out waiting for offline compression feedback at iter {timestep}"
-                    )
-                  time.sleep(0.05)
-              pdi.event("read_compressed_fdistribu")
 
           if diag_mode == 1:
             # Reduced diagnostics: local partial sums, finished by the fdistribu_reduced callback

@@ -111,21 +111,4 @@ def run_offline_compression_on_global_array(fdistribu_global, timestep, data_dir
     if not cfg.compressor.accepts_dask:
         fdistribu_global = np.asarray(fdistribu_global)
 
-    _coefficients, reconstructed = cfg.compressor.compress_decompress_array(fdistribu_global)
-    metrics = cfg.compressor.compute_metrics(
-        f_original=fdistribu_global,
-        f_reconstructed=reconstructed,
-    )
-
-    cfg.data_dir.mkdir(parents=True, exist_ok=True)
-    out_path = _offline_compressed_restart_path(cfg.data_dir, timestep)
-    _write_reconstruction_h5(out_path, reconstructed)
-
-    event_path = cfg.data_dir / "compression_events_offline.csv"
-    record = {"iter": timestep}
-    record.update({k: v for k, v in metrics.items() if k != "params"})
-    for key, value in (metrics.get("params") or {}).items():
-        record[f"param_{key}"] = value
-    _write_compression_event_csv(event_path, record)
-
-    return out_path
+    cfg.compressor.compress_decompress_array(fdistribu_global)

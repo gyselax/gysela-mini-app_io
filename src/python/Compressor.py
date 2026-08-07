@@ -118,10 +118,7 @@ class Compressor:
         self._last_compression_seconds = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        reconstructed = self.decompress_array(compressed)
         self._last_decompression_seconds = time.perf_counter() - t0
-
-        return compressed, reconstructed
 
     def compress_decompress_h5(
         self,

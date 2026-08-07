@@ -259,6 +259,21 @@ def main():
     eval_loss = float(jnp.mean((eval_pred - targets[eval_idx]) ** 2))
     print(f"held-out loss (fresh 50,000-point sample, never used for training): {eval_loss:.6e}")
 
+    # Full-grid check: the real production reconstruction path (decompress_array,
+    # chunked via _vmap_in_chunks, same as what a real user would get back), evaluated
+    # against every single point of the true fdistribu -- not a sample.
+    t_full0 = time.perf_counter()
+    recon = compressor.decompress_array(compressed)
+    full_grid_mse = float(jnp.mean((recon - jnp.asarray(fdistribu)) ** 2))
+    full_grid_rel_l2 = float(
+        jnp.linalg.norm(recon - jnp.asarray(fdistribu)) / jnp.linalg.norm(jnp.asarray(fdistribu))
+    )
+    t_full1 = time.perf_counter()
+    n_total = int(np.prod(fdistribu.shape))
+    print(f"full-grid loss (ALL {n_total:,} points, real decompress_array path): "
+          f"MSE={full_grid_mse:.6e}, relative L2={full_grid_rel_l2:.6e}  "
+          f"(reconstruction took {t_full1 - t_full0:.2f}s)")
+
 
 if __name__ == "__main__":
     main()

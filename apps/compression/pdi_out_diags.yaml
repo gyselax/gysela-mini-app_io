@@ -90,6 +90,9 @@ plugins:
           rank = comm.Get_rank()
           # 0 = full f through deisa, 1 = reduced through deisa, 2 = reduced to csv (deisa bypassed)
           diag_mode = int(os.environ.get("GYS_DIAG_MODE", "0"))
+
+          if rank == 0:
+            pycall_time = 0.0
       InitBridge:
         with: { global_fdistribu_extents: $global_fdistribu_extents,
                 local_fdistribu_extents: $local_fdistribu_extents,
@@ -100,6 +103,9 @@ plugins:
                 MeshVy_extents: $MeshVy_extents
               }
         exec: |
+          if rank == 0:
+            t0 = time.time()
+
           Nx  = int(MeshX_extents[0])
           Ny  = int(MeshY_extents[0])
           Nvx = int(MeshVx_extents[0])
@@ -108,45 +114,50 @@ plugins:
           local_shape  = tuple(int(x) for x in local_fdistribu_extents)
           chunk_pos    = tuple((local_fdistribu_starts // local_fdistribu_extents).astype(int).tolist())
           nsp_global = global_shape[0]
-          arrays_metadata = {
-              'fdistribu': {
-                  'global_shape':   global_shape,
-                  'chunk_shape':    local_shape,
-                  'chunk_position': chunk_pos,
-              },
-              'fdistribu_offline': {
-                  'global_shape':   global_shape,
-                  'chunk_shape':    local_shape,
-                  'chunk_position': chunk_pos,
-              },
-              'fdistribu_reduced': {
-                  'global_shape':   (comm.Get_size(), nsp_global, reduced_diagnostics.N_PARTIALS),
-                  'chunk_shape':    (1, nsp_global, reduced_diagnostics.N_PARTIALS),
-                  'chunk_position': (rank, 0, 0),
-              },
-          }
+
+          if diag_mode != 2:
+            arrays_metadata = {
+                'fdistribu': {
+                    'global_shape':   global_shape,
+                    'chunk_shape':    local_shape,
+                    'chunk_position': chunk_pos,
+                },
+                'fdistribu_offline': {
+                    'global_shape':   global_shape,
+                    'chunk_shape':    local_shape,
+                    'chunk_position': chunk_pos,
+                },
+                'fdistribu_reduced': {
+                    'global_shape':   (comm.Get_size(), nsp_global, reduced_diagnostics.N_PARTIALS),
+                    'chunk_shape':    (1, nsp_global, reduced_diagnostics.N_PARTIALS),
+                    'chunk_position': (rank, 0, 0),
+                },
+            }
+
+            if rank == 0:
+              non_dist_arrays = {
+                  'absolute_time': {
+                      'global_shape':   (1,),
+                      'chunk_shape':    (1,),
+                      'chunk_position': (0,),
+                  },
+                  'deltat': {
+                      'global_shape':   (1,),
+                      'chunk_shape':    (1,),
+                      'chunk_position': (0,),
+                  },
+                  'MeshX':  {'global_shape': (Nx,),  'chunk_shape': (Nx,),  'chunk_position': (0,)},
+                  'MeshY':  {'global_shape': (Ny,),  'chunk_shape': (Ny,),  'chunk_position': (0,)},
+                  'MeshVx': {'global_shape': (Nvx,), 'chunk_shape': (Nvx,), 'chunk_position': (0,)},
+                  'MeshVy': {'global_shape': (Nvy,), 'chunk_shape': (Nvy,), 'chunk_position': (0,)},
+              }
+              arrays_metadata = dict(arrays_metadata, **non_dist_arrays)
+
+            bridge = Bridge(comm, arrays_metadata)
 
           if rank == 0:
-            non_dist_arrays = {
-                'absolute_time': {
-                    'global_shape':   (1,),
-                    'chunk_shape':    (1,),
-                    'chunk_position': (0,),
-                },
-                'deltat': {
-                    'global_shape':   (1,),
-                    'chunk_shape':    (1,),
-                    'chunk_position': (0,),
-                },
-                'MeshX':  {'global_shape': (Nx,),  'chunk_shape': (Nx,),  'chunk_position': (0,)},
-                'MeshY':  {'global_shape': (Ny,),  'chunk_shape': (Ny,),  'chunk_position': (0,)},
-                'MeshVx': {'global_shape': (Nvx,), 'chunk_shape': (Nvx,), 'chunk_position': (0,)},
-                'MeshVy': {'global_shape': (Nvy,), 'chunk_shape': (Nvy,), 'chunk_position': (0,)},
-            }
-            arrays_metadata = dict(arrays_metadata, **non_dist_arrays)
-
-          bridge = Bridge(comm, arrays_metadata)
-          t1 = time.time()
+            pycall_time += time.time() - t0
+            tbegin = time.time()
       iteration:
         with:
           fdistribu: $fdistribu
@@ -163,10 +174,11 @@ plugins:
           MeshVy: $MeshVy
           local_fdistribu_starts: $local_fdistribu_starts
         exec: |
-          t0 = time.time()
-          timestep = int(it) + int(iter_offset)
           if rank == 0:
-            print(f"C++ iteration time : {t0 - t1}", flush=True)
+            t0 = time.time()
+            print(f"------ iteration {it} - {time.time() - tbegin} ------", flush=True)
+
+          timestep = int(it) + int(iter_offset)
 
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
             # Online Compression
@@ -175,20 +187,6 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 300.0
-              done = False
-              while not done:
-                try:
-                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
-                except KeyError:
-                  done = False
-                if not done:
-                  if time.time() > deadline:
-                    raise RuntimeError(
-                      f"Timed out waiting for offline compression feedback at iter {timestep}"
-                    )
-                  time.sleep(0.05)
-              pdi.event("read_compressed_fdistribu")
 
           if timestep % int(nbstep_diag) == 0:
             if diag_mode == 1:
@@ -209,10 +207,11 @@ plugins:
               bridge.send("MeshY",  np.array(MeshY),  timestep)
               bridge.send("MeshVx", np.array(MeshVx), timestep)
               bridge.send("MeshVy", np.array(MeshVy), timestep)
-          if timestep % 10 == 0:
-            if rank == 0:
-              print(f"--------------------------timestep: {timestep}", flush=True)
-          t1 = time.time()
+
+          if rank == 0:
+            if timestep % 10 == 0:
+              print(f"--------------------------timestep: {timestep} -----", flush=True)
+            pycall_time += time.time() - t0
       last_iteration:
         with:
           fdistribu: $fdistribu
@@ -228,6 +227,9 @@ plugins:
           MeshVy: $MeshVy
           local_fdistribu_starts: $local_fdistribu_starts
         exec: |
+          if rank == 0:
+            t0 = time.time()
+
           timestep = int(it) + int(iter_offset)
 
           if int(nb_step_compression) > 0 and timestep > 0 and timestep % int(nb_step_compression) == 0:
@@ -237,20 +239,6 @@ plugins:
             # Offline Compression
             elif int(compression_mode) == 2:
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              deadline = time.time() + 60.0
-              done = False
-              while not done:
-                try:
-                  done = bool(bridge.get("fdistribu_offline_done", timestep=timestep))
-                except KeyError:
-                  done = False
-                if not done:
-                  if time.time() > deadline:
-                    raise RuntimeError(
-                      f"Timed out waiting for offline compression feedback at iter {timestep}"
-                    )
-                  time.sleep(0.05)
-              pdi.event("read_compressed_fdistribu")
 
           if diag_mode == 1:
             # Reduced diagnostics: local partial sums, finished by the fdistribu_reduced callback
@@ -270,12 +258,23 @@ plugins:
             bridge.send("MeshY",  np.array(MeshY),  timestep)
             bridge.send("MeshVx", np.array(MeshVx), timestep)
             bridge.send("MeshVy", np.array(MeshVy), timestep)
+
+          if rank == 0:
+            pycall_time += time.time() - t0
       EndSimulation:
         with:
           it: $iter
           iter_offset: $iter_offset
         exec: |
-          bridge.close(int(it) + int(iter_offset))
+          if rank == 0:
+            t0 = time.time()
+          
+          if diag_mode != 2:
+            bridge.close(int(it) + int(iter_offset))
+
+          if rank == 0:
+            pycall_time += time.time() - t0
+            print("Time pycall:", pycall_time, flush=True)
   set_value:
     on_init:
       - share:
@@ -320,21 +319,5 @@ plugins:
       on_event: [initial_state]
       collision_policy: replace_and_warn
       write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
-    - file: 'GYSELALIBXX_${iter_saved:05}.h5'
-      communicator: $MPI_COMM_WORLD
-      on_event: [last_iteration]
-      collision_policy: replace_and_warn
-      datasets:
-        fdistribu:
-          type: array
-          subtype: double
-          size: [ '$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]' ]
-      write:
-        time_saved: $absolute_time
-        fdistribu:
-          dataset_selection:
-            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
-            start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
-        electrostatic_potential: ~
   #trace: ~
 

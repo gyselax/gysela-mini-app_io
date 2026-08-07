@@ -230,8 +230,12 @@ int main(int argc, char **argv) {
   MPI_Init(&argc, &argv);
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
   print_banner(rank);
+
+  steady_clock::time_point time_points[6];
+  std::vector<std::string> timing_names(6);
+
+  time_points[0] = steady_clock::now();
 
   Kokkos::ScopeGuard scope(argc, argv);
   ddc::ScopeGuard ddc_scope(argc, argv);
@@ -303,7 +307,7 @@ int main(int argc, char **argv) {
     compression_period = static_cast<int>(
         PCpp_int(configs.conf_gyselax, ".CompressionBenchmark.compression_period"));
   }
-  int compression_mode = 0;  // 0 = none, 1 = online (pycall), 2 = offline (deisa-dask)
+  int compression_mode = 1;  // 0 = none, 1 = online (pycall), 2 = offline (deisa-dask)
   if (!PC_status(PC_get(configs.conf_gyselax, ".CompressionBenchmark.compression_mode"))) {
     compression_mode = static_cast<int>(
         PCpp_int(configs.conf_gyselax, ".CompressionBenchmark.compression_mode"));
@@ -425,19 +429,39 @@ int main(int argc, char **argv) {
   }
 
   ddc::PdiEvent("Init");
+
+  time_points[1] = steady_clock::now();
+  timing_names[0] = "Simulation initialisation";
+
   ddc::PdiEvent("InitBridge");
 
-  steady_clock::time_point const start = steady_clock::now();
+  time_points[2] = steady_clock::now();
+  timing_names[1] = "Bridge initialisation";
 
   predcorr(get_field(allfdistribu_v2D_split), deltat, nbiter);
 
-  steady_clock::time_point const end = steady_clock::now();
+  time_points[3] = steady_clock::now();
+  timing_names[2] = "full simulation";
 
   ddc::PdiEvent("EndSimulation").with("iter", nbiter);
 
-  double const simulation_time =
-      std::chrono::duration<double>(end - start).count();
-  std::cout << "Simulation time: " << simulation_time << "s\n";
+  if (rank == 0) {
+    double durations[4];
+    for (int i = 1; i <= 3; i++) {
+      durations[i-1] =
+          std::chrono::duration<double>(time_points[i] - time_points[i-1])
+              .count();
+    }
+    durations[3] =
+        std::chrono::duration<double>(time_points[3] - time_points[0]).count();
+    timing_names[3] = "total";
+    for (int i = 0; i < 4; i++) {
+      cout << "Time " << timing_names[i] << ": " << durations[i] << "s" << endl;
+    }
+    // Use the new function to write timing stats as a table
+    //write_cpu_time_stats(rank, durations, timing_names, timing_names.size());
+  }
+
 
   PC_tree_destroy(&configs.conf_pdi);
 

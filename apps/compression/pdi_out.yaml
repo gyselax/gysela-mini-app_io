@@ -1,5 +1,5 @@
 metadata:
-  fdistribu_filename_size:  size_t 
+  fdistribu_filename_size:  size_t
   fdistribu_filename: { type: array, subtype: char, size: "$fdistribu_filename_size" }
   Nx_spline_cells : int
   Ny_spline_cells : int
@@ -11,6 +11,8 @@ metadata:
   deltat: double
   absolute_time: double
   nbstep_diag: int
+  nb_step_compression: int
+  compression_mode: int
   iter_saved : int
   MeshX_extents: { type: array, subtype: int64, size: 1 }
   MeshX:
@@ -49,9 +51,13 @@ metadata:
     subtype: double
     size: [ '$fdistribu_eq_extents[0]', '$fdistribu_eq_extents[1]', '$fdistribu_eq_extents[2]' ]
 
-  #-- Parallel data
+  #-- Parallel data (local chunk)
   local_fdistribu_starts: { type: array, subtype: size_t, size: 5 }
   local_fdistribu_extents: { type: array, subtype: size_t, size: 5 }
+
+  #-- Global fdistribu shape (for bridge metadata — distinct from 'fdistribu' data element)
+  global_fdistribu_starts: { type: array, subtype: size_t, size: 5 }
+  global_fdistribu_extents: { type: array, subtype: size_t, size: 5 }
 
 
 data:
@@ -67,6 +73,22 @@ data:
 
 plugins:
   mpi:
+  pycall:
+    on_event:
+      Init:
+        with: {}
+        exec: |
+          import time
+          from mpi4py import MPI
+          comm = MPI.COMM_WORLD
+          rank = comm.Get_rank()
+          t0 = time.time()
+      iteration:
+        with:
+          it: $iter
+        exec: |
+          if rank == 0:
+            print(f"------ iteration {it} - {time.time() - t0} ------", flush=True)
   set_value:
     on_init:
       - share:
@@ -76,7 +98,7 @@ plugins:
       iter:
         - set:
           # Shift file number in order not to change predcorr_implementation
-          - iter_saved: '(${iter} + ${iter_offset}) / ${nbstep_diag}'
+          - iter_saved: '${iter} + ${iter_offset}'
           - absolute_time: '(${iter} + ${iter_offset}) * ${deltat}'
     on_finalize:
       - release: [iter_saved, absolute_time]
@@ -98,21 +120,5 @@ plugins:
       on_event: [initial_state]
       collision_policy: replace_and_warn
       write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
-    - file: 'GYSELALIBXX_${iter_saved:05}.h5'
-      communicator: $MPI_COMM_WORLD
-      on_event: [iteration, last_iteration]
-      when: '${iter} % ${nbstep_diag} = 0'
-      collision_policy: replace_and_warn
-      datasets:
-        fdistribu:
-          type: array
-          subtype: double
-          size: [ '$Nkinspecies', '$MeshX_extents[0]', '$MeshY_extents[0]', '$MeshVx_extents[0]', '$MeshVy_extents[0]' ]
-      write:
-        time_saved: $absolute_time
-        fdistribu:
-          dataset_selection:
-            size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
-            start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
-        electrostatic_potential: ~
   #trace: ~
+

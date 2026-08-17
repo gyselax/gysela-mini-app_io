@@ -903,6 +903,7 @@ def run_pipeline(args):
                 "arch": args.arch_nn if getattr(args, 'arch_nn', None) else nn_cfg.get("arch", "periodic_siren_deep_128"),
                 "lr": float(nn_cfg.get("lr", 1e-3)),
                 "max_iters": int(nn_cfg.get("max_iters", 2000)),
+                "warm_max_iters": int(nn_cfg.get("warm_max_iters", nn_cfg.get("max_iters", 2000))),
                 "batch_size": int(nn_cfg.get("batch_size", 2000)),
                 "polish_optimizer": args.polish_optimizer_nn if getattr(args, 'polish_optimizer_nn', None) else nn_cfg.get("polish_optimizer", "lbfgs"),
                 "lbfgs_iters": int(nn_cfg.get("lbfgs_iters", 50)),

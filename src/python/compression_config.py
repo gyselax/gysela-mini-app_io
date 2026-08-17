@@ -20,6 +20,7 @@ OFFLINE_COMPRESSOR_PARAMS = {
     "arch": "periodic_siren_deep_128",
     "lr": 1e-3,
     "max_iters": 2000,
+    "warm_max_iters": 2000,
     "batch_size": 2000,
     "polish_optimizer": "lbfgs",
     "lbfgs_iters": 50,

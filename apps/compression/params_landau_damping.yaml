@@ -41,15 +41,14 @@ compression:
   NN:
     arch: "periodic_siren_small_32"
     lr: 1.0e-3 # for offline compression, a lr decay is applied only when is_warm is true; the lr is kept constant for the cold-start phase
-    max_iters: 2000
+    max_iters: 2000       # ADAM iterations, cold-start species, and always for warm-started species when polish_optimizer == "lbfgs"
+    warm_max_iters: 500   # ADAM iterations, warm-started species , only used when polish_optimizer == "gauss_newton" 
     batch_size: 50000
-    # Optimizer for the polish phase that runs after ADAM
-    polish_optimizer: "lbfgs"
+    polish_optimizer: "lbfgs" # or "gauss_newton"
     lbfgs_iters: 50
-    lbfgs_chunk_size: 200000  # points per jax.lax.scan step in the L-BFGS phase (bounds peak GPU memory, independent of grid resolution)
-    gn_iters: 50
-    gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration (used only if polish_optimizer == "gauss_newton") -- needs to stay >> n_params (~2369 for periodic_siren_small_32) for a well-posed batch
-    gn_init_damping: 1.0e-2
+    lbfgs_chunk_size: 200000  # points per jax.lax.scan step in the L-BFGS phase
+    gn_iters: 150   
+    gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration 
     gn_chunk_size: 2000  # points per jax.lax.scan step for the Gauss-Newton Jacobian (bounds peak GPU memory independent of gn_n_map)
 
 Output:

@@ -440,6 +440,7 @@ class NeuralNetworkCompressor(Compressor):
         lr: float = 1e-3,
         lr_decay_alpha: float = 0.01,
         max_iters: int = 2000,
+        warm_max_iters: Optional[int] = None,
         batch_size: int = 2000,
         polish_optimizer: str = "lbfgs",
         lbfgs_iters: int = 50,
@@ -477,6 +478,7 @@ class NeuralNetworkCompressor(Compressor):
         self.lr = float(lr)
         self.lr_decay_alpha = float(lr_decay_alpha)
         self.max_iters = int(max_iters)
+        self.warm_max_iters = int(warm_max_iters) if warm_max_iters is not None else self.max_iters
         self.batch_size = int(batch_size)
         self.polish_optimizer = polish_optimizer
         self.lbfgs_iters = int(lbfgs_iters)
@@ -504,6 +506,7 @@ class NeuralNetworkCompressor(Compressor):
             lr=self.lr,
             lr_decay_alpha=self.lr_decay_alpha,
             max_iters=self.max_iters,
+            warm_max_iters=self.warm_max_iters,
             batch_size=self.batch_size,
             polish_optimizer=self.polish_optimizer,
             lbfgs_iters=self.lbfgs_iters,
@@ -588,15 +591,20 @@ class NeuralNetworkCompressor(Compressor):
         
         best_model, best_loss = model, float("inf")
 
+        if is_warm and self.polish_optimizer == "gauss_newton":
+            n_iters_adam = self.warm_max_iters
+        else:
+            n_iters_adam = self.max_iters
+
         #Phase 1: ADAM, mini-batches. On a warm-started species only, lr decays over the run instead of staying constant
         if is_warm:
             learning_rate = optax.cosine_decay_schedule(
-                init_value=self.lr, decay_steps=self.max_iters, alpha=self.lr_decay_alpha
+                init_value=self.lr, decay_steps=n_iters_adam, alpha=self.lr_decay_alpha
             )
         else:
             learning_rate = self.lr
         adam_opt = ScimbaAdam(model, _losses_function, learning_rate=learning_rate)
-        pbar = _training_progress(self.max_iters, f"[INR/{self.arch}][ADAM]", self.verbose)
+        pbar = _training_progress(n_iters_adam, f"[INR/{self.arch}][ADAM]", self.verbose)
         for i in pbar:
             key, subkey = jax.random.split(key)
             batch_idx = jax.random.choice(subkey, total_points, shape=(self.batch_size,), replace=False)

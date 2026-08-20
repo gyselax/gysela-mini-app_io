@@ -48,9 +48,9 @@ compression:
     lbfgs_iters: 50
     lbfgs_chunk_size: 200000  # points per jax.lax.scan step in the L-BFGS phase
     gn_iters: 150 
-    #for small_32 :  
-    #gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration 
-    #gn_chunk_size: 2000  # points per jax.lax.scan step for the Gauss-Newton Jacobian (bounds peak GPU memory independent of gn_n_map)
+    #for small_32 and small_16 :  
+    gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration 
+    gn_chunk_size: 2000  # points per jax.lax.scan step for the Gauss-Newton Jacobian (bounds peak GPU memory independent of gn_n_map)
     
     #for small_32_l5 :
     gn_n_map: 16000

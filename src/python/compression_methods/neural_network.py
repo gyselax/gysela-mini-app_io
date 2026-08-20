@@ -160,6 +160,9 @@ AVAILABLE_INR_ARCHS = [
     "periodic_fourier_mlp_deep_128",
     "periodic_siren_small_32",
     "periodic_fourier_mlp_small_32",
+    "periodic_siren_small_32_l5",
+    "periodic_siren_small_32_l8",
+    "periodic_siren_small_32_l12",
 ]
 
 # Choices for the polish-phase optimizer
@@ -171,6 +174,9 @@ def get_inr_model(arch: str, key: jax.Array) -> eqx.Module:
     elif arch == "periodic_fourier_mlp_deep_128": return PeriodicFourierScimbaINR(16, [128]*5, 10.0, key)
     elif arch == "periodic_siren_small_32": return PeriodicSIRENScimbaINR([32]*3, 30.0, key)
     elif arch == "periodic_fourier_mlp_small_32": return PeriodicFourierScimbaINR(8, [32]*3, 10.0, key)
+    elif arch == "periodic_siren_small_32_l5": return PeriodicSIRENScimbaINR([32]*5, 30.0, key)
+    elif arch == "periodic_siren_small_32_l8": return PeriodicSIRENScimbaINR([32]*8, 30.0, key)
+    elif arch == "periodic_siren_small_32_l12": return PeriodicSIRENScimbaINR([32]*12, 30.0, key)
     else:
         raise ValueError(f"Unknown INR architecture: {arch}. Available: {AVAILABLE_INR_ARCHS}")
     

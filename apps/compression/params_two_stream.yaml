@@ -47,9 +47,18 @@ compression:
     polish_optimizer: "lbfgs" # or "gauss_newton"
     lbfgs_iters: 50
     lbfgs_chunk_size: 200000  # points per jax.lax.scan step in the L-BFGS phase
-    gn_iters: 150   
-    gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration 
-    gn_chunk_size: 2000  # points per jax.lax.scan step for the Gauss-Newton Jacobian (bounds peak GPU memory independent of gn_n_map)
+    gn_iters: 150 
+    #for small_32 :  
+    #gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration 
+    #gn_chunk_size: 2000  # points per jax.lax.scan step for the Gauss-Newton Jacobian (bounds peak GPU memory independent of gn_n_map)
+    
+    #for small_32_l5 :
+    gn_n_map: 16000
+    gn_chunk_size: 800
+
+    #small_32_l8 :
+    #gn_n_map: 24000
+    #gn_chunk_size: 400
 
 Output:
   nbiter_diag: 1  # diagnostics every N timesteps (must divide compression_period)

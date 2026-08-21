@@ -957,7 +957,7 @@ class OnlineNeuralNetworkCompressor:
                 
                 model, gn_loss_hist = train_map_gn(
                     self.gn_n_map, make_data, model,
-                    n_iterations=n_iters_gn, init_damping=self.gn_init_damping, 
+                    n_iterations=n_iters_gn, init_damping=self.gn_init_damping,
                     chunk_size=self.gn_chunk_size,
                 )
                 gn_loss_hist = np.asarray(gn_loss_hist)
@@ -1048,10 +1048,13 @@ class OnlineNeuralNetworkCompressor:
 
         if self.verbose:
             tag = "cold" if cold_start else "warm"
+            polish_label, n_iters_polish = (
+                ("Gauss-Newton", n_iters_gn) if self.polish_optimizer == "gauss_newton" else ("L-BFGS", n_iters_lbfgs)
+            )
             print(f"[OnlineINR/{self.arch}] rank {rank}: device {jax.default_backend()}", flush=True)
             print(
                 f"[OnlineINR/{self.arch}] rank {rank}: {tag} fit "
-                f"(ADAM {n_iters_adam} + L-BFGS {n_iters_lbfgs} iters) "
+                f"(ADAM {n_iters_adam} + {polish_label} {n_iters_polish} iters) "
                 f"final losses {['%.2e' % l for l in final_losses]}",
                 flush=True,
             )

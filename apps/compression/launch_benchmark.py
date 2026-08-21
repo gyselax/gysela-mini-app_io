@@ -12,6 +12,8 @@ from datetime import datetime
 import yaml
 import csv
 
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 # ------------------------------------------------------------------
 # Compression params / names
 # ------------------------------------------------------------------
@@ -190,7 +192,8 @@ def parse_args():
             "Use online in-situ compression instead of the offline."
         ),
     )
-    
+
+
     parser.add_argument(
         "--compression", 
         type=str, 
@@ -946,6 +949,7 @@ def run_pipeline(args):
     online_method_override = {
         "arch": args.arch_nn if getattr(args, 'arch_nn', None) else online_nn_cfg.get("arch", "periodic_siren_deep_128"),
         "lr": float(online_nn_cfg.get("lr", 1e-4)),
+        "batch_size": int(online_nn_cfg.get("batch_size", 2000)),
         "warm_iters_adam": int(online_nn_cfg.get("warm_iters_adam", 5000)),
         "warm_iters_lbfgs": int(online_nn_cfg.get("warm_iters_lbfgs", 100)),
         "refine_iters_adam": int(online_nn_cfg.get("refine_iters_adam", 500)),

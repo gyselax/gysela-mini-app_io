@@ -4,6 +4,8 @@ import glob
 import os
 from pathlib import Path
 
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
@@ -79,10 +81,7 @@ def load_diags(filename):
     order = np.argsort(rows["iter"])
     return {k: np.array(v)[order] for k, v in rows.items()}
 
-def load_compression_events(data_dir):
-    path = Path(data_dir) / "compression_events_offline.csv"
-    if not path.exists():
-        return None
+def _read_compression_events_csv(path):
     iters, data = [], {}
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
@@ -94,7 +93,30 @@ def load_compression_events(data_dir):
                     data.setdefault(k, []).append(float(v))
                 except (TypeError, ValueError):
                     pass
-    return iters, data 
+    return iters, data
+
+
+def load_compression_events(data_dir):
+    """Offline writes one compression_events_offline.csv; online writes one
+    compression_events_rank{NNN}.csv per MPI rank (see compression_diagnostics.py) --
+    for online, average each numeric metric across ranks per checkpoint iter.
+    """
+    path = Path(data_dir) / "compression_events_offline.csv"
+    if path.exists():
+        return _read_compression_events_csv(path)
+
+    rank_paths = sorted(Path(data_dir).glob("compression_events_rank*.csv"))
+    if not rank_paths:
+        return None
+
+    per_rank = [_read_compression_events_csv(p) for p in rank_paths]
+    iters = per_rank[0][0]
+    merged = {}
+    for key in per_rank[0][1]:
+        cols = [d[key] for _, d in per_rank if key in d and len(d[key]) == len(iters)]
+        if cols:
+            merged[key] = list(np.mean(np.array(cols), axis=0))
+    return iters, merged
 
 def _pipeline_prefix(parts):
     """("offline",), ("online",), or () depending on whether offline_compression/

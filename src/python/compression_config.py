@@ -71,7 +71,8 @@ def build_offline_compressor(**overrides):
     return compressor_class(**params)
 
 def build_online_compressor(rank=None):
-    params = dict(ONLINE_COMPRESSOR_PARAMS)
+    method_override = os.environ.get("COMPRESSION_ONLINE_METHOD_OVERRIDE")
+    params = json.loads(method_override) if method_override else dict(ONLINE_COMPRESSOR_PARAMS)
     if rank is not None:
         # Every MPI rank otherwise builds its compressor from the same default
         # seed, so all ranks' networks start from identical initial weights

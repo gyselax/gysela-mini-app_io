@@ -622,9 +622,11 @@ def run_baseline(run_dir, run_pdi_yaml, iter_total, n_workers=1):
 def run_offline_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period,
                                    mesh_kwargs=None, method_override=None, n_workers=1):
     branch_name = _offline_branch_name(method_override)
-    dir_offline = os.path.join(run_dir, branch_name)
+    pipeline_dir = os.path.join(run_dir, "offline_compression")
+    dir_offline = os.path.join(pipeline_dir, branch_name)
     config_tag = branch_name.replace("/", "_")
-    yaml_offline = os.path.join(run_dir, f"config_{config_tag}.yaml")
+    yaml_offline = os.path.join(pipeline_dir, f"config_{config_tag}.yaml")
+    os.makedirs(pipeline_dir, exist_ok=True)
 
     create_yaml_override(
         SOURCE_GYSELA_YAML, 
@@ -665,9 +667,14 @@ def _collect_offline_compression_events(work_dir):
         return [dict(row) for row in csv.DictReader(fh)]
 
 
-def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1):
-    dir_online = os.path.join(run_dir, "branch_online_compressed")
-    yaml_online = os.path.join(run_dir, "config_online_compressed.yaml")
+def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_period, n_workers=1,
+                                  method_override=None):
+    branch_name = _online_branch_name(method_override)
+    pipeline_dir = os.path.join(run_dir, "online_compression")
+    dir_online = os.path.join(pipeline_dir, branch_name)
+    config_tag = branch_name.replace("/", "_")
+    yaml_online = os.path.join(pipeline_dir, f"config_{config_tag}.yaml")
+    os.makedirs(pipeline_dir, exist_ok=True)
 
     create_yaml_override(
         SOURCE_GYSELA_YAML,
@@ -680,12 +687,17 @@ def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_
         compression_mode=1,
     )
 
+    extra_env = {}
+    if method_override:
+        extra_env["COMPRESSION_ONLINE_METHOD_OVERRIDE"] = json.dumps(method_override)
+
     run_sim_with_diagnostics(
-        branch_name="Online compressed",
+        branch_name=branch_name.replace("branch_", ""),
         gysela_yaml=yaml_online,
         pdi_yaml=run_pdi_yaml,
         work_dir=dir_online,
         n_workers=n_workers,
+        extra_env=extra_env or None,
     )
 
     events = _collect_online_compression_events(dir_online)
@@ -694,11 +706,10 @@ def run_online_compressed_branch(run_dir, run_pdi_yaml, iter_total, compression_
     return dir_online
 
 def _offline_branch_name(method_override):
-    """Relative path (under run_dir) of an offline-compressed branch's work dir.
+    """Relative path (under run_dir/offline_compression) of an offline-compressed
+    branch's work dir.
 
-    Nested as NN/<arch>/<polish_optimizer> or POD/r<n_components> so that runs
-    for different architectures/optimizers never share a directory (and thus
-    never silently overwrite each other's checkpoints, loss curves, etc.).
+    Nested as NN/<arch>/<polish_optimizer> or POD/r<n_components>
     """
     if not method_override:
         return "branch_offline_compressed"
@@ -713,6 +724,18 @@ def _offline_branch_name(method_override):
         return f"NN/{arch}/polish_{polish_optimizer}"
     return "branch_offline_compressed"
 
+def _online_branch_name(method_override):
+    """Relative path (under run_dir/online_compression) of an online-compressed
+    branch's work dir.
+
+    Nested as NN/<arch>/<polish_optimizer>
+    """
+    if not method_override:
+        return "branch_online_compressed"
+    arch = method_override["arch"]
+    polish_optimizer = method_override.get("polish_optimizer", "lbfgs")
+    return f"NN/{arch}/polish_{polish_optimizer}"
+
 
 def _collect_online_compression_events(work_dir):
     events = []
@@ -723,26 +746,30 @@ def _collect_online_compression_events(work_dir):
     return events
 
 
-def compare_results(run_dir):
-    # Branches now live under nested dirs (NN/<arch>/<optimizer>, POD/r<n>),
-    # not just directly under run_dir, so this has to walk recursively.
+def compare_results(run_dir, walk_root=None):
+    walk_root = walk_root or run_dir
+    baseline_csv = os.path.join(run_dir, "branch_baseline", "diagnostics.csv")
+
     diag_files = sorted(
         (os.path.join(dirpath, "diagnostics.csv")
-         for dirpath, _, filenames in os.walk(run_dir)
+         for dirpath, _, filenames in os.walk(walk_root)
          if "diagnostics.csv" in filenames),
         key=lambda p: (os.path.basename(os.path.dirname(p)) != "branch_baseline", p),
     )
+    if os.path.exists(baseline_csv) and baseline_csv not in diag_files:
+        diag_files.insert(0, baseline_csv)
 
     if not diag_files:
         print("\nNo diagnostics.csv files found — skipping comparison plot.")
         return
 
-    output = os.path.join(run_dir, "diags_comparison.png")
+    output = os.path.join(walk_root, "diags_comparison.png")
     plot_diags(diag_files, output=output)
 
     # One final_snapshot_comparison.png per compressed branch, saved inside
     # that branch's own directory (see plot_final_snapshot_comparison).
-    plot_final_snapshot_comparison(run_dir)
+    baseline_dir = os.path.dirname(baseline_csv) if os.path.exists(baseline_csv) else None
+    plot_final_snapshot_comparison(walk_root, baseline_dir=baseline_dir)
 
 
 # ------------------------------------------------------------------
@@ -896,7 +923,7 @@ def run_pipeline(args):
             }
         }
     elif selected_method == "NN":
-        nn_cfg = comp_cfg.get("NN", {})
+        nn_cfg = comp_cfg.get("offline_NN", {})
         method_override = {
             "class": "NeuralNetwork",
             "params": {
@@ -914,6 +941,24 @@ def run_pipeline(args):
                 "gn_chunk_size": int(nn_cfg.get("gn_chunk_size", 2000)),
             }
         }
+
+    online_nn_cfg = comp_cfg.get("online_NN", {})
+    online_method_override = {
+        "arch": args.arch_nn if getattr(args, 'arch_nn', None) else online_nn_cfg.get("arch", "periodic_siren_deep_128"),
+        "lr": float(online_nn_cfg.get("lr", 1e-4)),
+        "warm_iters_adam": int(online_nn_cfg.get("warm_iters_adam", 5000)),
+        "warm_iters_lbfgs": int(online_nn_cfg.get("warm_iters_lbfgs", 100)),
+        "refine_iters_adam": int(online_nn_cfg.get("refine_iters_adam", 500)),
+        "refine_iters_lbfgs": int(online_nn_cfg.get("refine_iters_lbfgs", 10)),
+        "polish_optimizer": args.polish_optimizer_nn if getattr(args, 'polish_optimizer_nn', None) else online_nn_cfg.get("polish_optimizer", "lbfgs"),
+        "warm_iters_gn": int(online_nn_cfg.get("warm_iters_gn", 150)),
+        "refine_iters_gn": int(online_nn_cfg.get("refine_iters_gn", 30)),
+        "gn_n_map": int(online_nn_cfg.get("gn_n_map", 16000)),
+        "gn_init_damping": float(online_nn_cfg.get("gn_init_damping", 1e-2)),
+        "gn_chunk_size": int(online_nn_cfg.get("gn_chunk_size", 2000)),
+        "verbose": bool(online_nn_cfg.get("verbose", True)),
+        "debug_plot": bool(online_nn_cfg.get("debug_plot", True)),
+    }
 
     n_workers = effective_n_workers(args)
 
@@ -934,6 +979,7 @@ def run_pipeline(args):
             iter_total=iter_total,
             compression_period=compression_period,
             n_workers=n_workers,
+            method_override=online_method_override,
         )
     else:
         run_offline_compressed_branch(
@@ -961,7 +1007,8 @@ def main():
         return
 
     run_dir = run_pipeline(args)
-    compare_results(run_dir)
+    walk_root = os.path.join(run_dir, "online_compression" if args.online else "offline_compression")
+    compare_results(run_dir, walk_root=walk_root)
 
 
 if __name__ == "__main__":

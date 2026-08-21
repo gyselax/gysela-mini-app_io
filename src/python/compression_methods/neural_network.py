@@ -833,6 +833,12 @@ class OnlineNeuralNetworkCompressor:
         warm_iters_lbfgs: int = 20,
         refine_iters_adam: int = 20,
         refine_iters_lbfgs: int = 5,
+        polish_optimizer: str = "lbfgs",
+        warm_iters_gn: int = 150,
+        refine_iters_gn: int = 30,
+        gn_n_map: int = 16000,
+        gn_init_damping: float = 1e-2,
+        gn_chunk_size: int = 2000,
         batch_size: Optional[int] = None,
         threshold: float = 1e-8,
         seed: int = 42,
@@ -842,6 +848,18 @@ class OnlineNeuralNetworkCompressor:
     ):
         if arch not in AVAILABLE_INR_ARCHS:
             raise ValueError(f"Unknown arch {arch!r}. Available: {AVAILABLE_INR_ARCHS}")
+        
+        if polish_optimizer not in AVAILABLE_POLISH_OPTIMIZERS:
+            raise ValueError(
+                f"Unknown polish_optimizer {polish_optimizer!r}. Available: {AVAILABLE_POLISH_OPTIMIZERS}"
+            )
+        if polish_optimizer == "gauss_newton" and "deep_128" in arch:
+            raise ValueError(
+                f"polish_optimizer='gauss_newton' is not usable with arch={arch!r}: its dense "
+                "Gauss-Newton matrix (n_params x n_params) needs ~36G  and reliably OOMs "
+                "on this architecture, independent of batch size (gn_n_map). Use a "
+                "'_small_32' architecture, or polish_optimizer='lbfgs' instead."
+            )
 
         self.arch = arch
         self.lr = float(lr)
@@ -849,6 +867,12 @@ class OnlineNeuralNetworkCompressor:
         self.warm_iters_lbfgs = int(warm_iters_lbfgs)
         self.refine_iters_adam = int(refine_iters_adam)
         self.refine_iters_lbfgs = int(refine_iters_lbfgs)
+        self.polish_optimizer = polish_optimizer
+        self.warm_iters_gn = int(warm_iters_gn)
+        self.refine_iters_gn = int(refine_iters_gn)
+        self.gn_n_map = int(gn_n_map)
+        self.gn_init_damping = float(gn_init_damping)
+        self.gn_chunk_size = int(gn_chunk_size)
         self.batch_size = int(batch_size) if batch_size is not None else None
         self.threshold = float(threshold)
         self.seed = int(seed)
@@ -867,8 +891,10 @@ class OnlineNeuralNetworkCompressor:
     def printable_name(self) -> str:
         return (
             f"{self.method_name}(arch={self.arch}, lr={self.lr}, "
-            f"warm_iters_adam={self.warm_iters_adam}, warm_iters_lbfgs={self.warm_iters_lbfgs}, "
-            f"refine_iters_adam={self.refine_iters_adam}, refine_iters_lbfgs={self.refine_iters_lbfgs})"
+            f"warm_iters_adam={self.warm_iters_adam}, warm_iters_lbfgs={self.warm_iters_lbfgs}, warm_iters_gn={self.warm_iters_gn}, "
+            f"refine_iters_adam={self.refine_iters_adam}, refine_iters_lbfgs={self.refine_iters_lbfgs}, refine_iters_gn={self.refine_iters_gn}, "
+            f"polish_optimizer={self.polish_optimizer}, "
+            f"gn_n_map={self.gn_n_map}, gn_init_damping={self.gn_init_damping}, gn_chunk_size={self.gn_chunk_size} )"
         )
 
     @staticmethod
@@ -881,7 +907,7 @@ class OnlineNeuralNetworkCompressor:
         return jnp.stack([Xg.ravel(), Yg.ravel(), VXg.ravel(), VYg.ravel()], axis=-1)
 
     def _fit_one_species(
-        self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int,
+        self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int, n_iters_gn: int,
         desc: str = "",
     ):
         total_points = inputs.shape[0]
@@ -907,20 +933,39 @@ class OnlineNeuralNetworkCompressor:
             if loss_val < self.threshold:
                 break
 
-        # Phase 2: L-BFGS, full-batch, freshly instantiated each call to polish
-        # the ADAM warm-started fit (same two-phase routine as the offline compressor)
-        if n_iters_lbfgs > 0 and (loss_val is None or loss_val >= self.threshold):
-            full_batch = (inputs, targets)
-            lbfgs_opt = ScimbaLBfgs(model, _losses_function)
-            pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS]", self.verbose)
-            for _ in pbar:
-                loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
-                loss_val = float(loss_dict["total"])
-                pbar.set_postfix(loss=f"{loss_val:.2e}")
-                if loss_val < best_loss:
-                    best_model, best_loss = model, loss_val
-                if loss_val < self.threshold:
-                    break
+        # Phase 2: L-BFGS or Gauss-Newton
+        n_iters_polish = n_iters_lbfgs if self.polish_optimizer == "lbfgs" else n_iters_gn
+        if n_iters_polish > 0 and (loss_val is None or loss_val >= self.threshold):
+            if self.polish_optimizer == "lbfgs":
+                full_batch = (inputs, targets)
+                lbfgs_opt = ScimbaLBfgs(model, _losses_function)
+                pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS]", self.verbose)
+                for _ in pbar:
+                    loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
+                    loss_val = float(loss_dict["total"])
+                    pbar.set_postfix(loss=f"{loss_val:.2e}")
+                    if loss_val < best_loss:
+                        best_model, best_loss = model, loss_val
+                    if loss_val < self.threshold:
+                        break
+            
+            else: #gauss_newton
+                def make_data(n_map,k):
+                    k, subkey = jax.random.split(k)
+                    idx = jax.random.choice(subkey, total_points, shape=(n_map,), replace=(n_map > total_points))
+                    return inputs[idx], targets[idx], k
+                
+                model, gn_loss_hist = train_map_gn(
+                    self.gn_n_map, make_data, model,
+                    n_iterations=n_iters_gn, init_damping=self.gn_init_damping, 
+                    chunk_size=self.gn_chunk_size,
+                )
+                gn_loss_hist = np.asarray(gn_loss_hist)
+                if gn_loss_hist.size:
+                    best_gn_loss = float(gn_loss_hist.min())
+                    loss_val = float(gn_loss_hist[-1])
+                    if best_gn_loss < best_loss :
+                        best_model, best_loss = model, best_gn_loss
 
         return best_model, opt, best_loss
 
@@ -978,13 +1023,14 @@ class OnlineNeuralNetworkCompressor:
         inputs = self._build_local_inputs(nx, ny, nvx, nvy)
         n_iters_adam = self.warm_iters_adam if cold_start else self.refine_iters_adam
         n_iters_lbfgs = self.warm_iters_lbfgs if cold_start else self.refine_iters_lbfgs
+        n_iters_gn = self.warm_iters_gn if cold_start else self.refine_iters_gn
 
         t0 = time.perf_counter()
         final_losses = []
         for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
             model, opt, loss_val = self._fit_one_species(
-                self.models[isp], self._opts[isp], inputs, targets, n_iters_adam, n_iters_lbfgs,
+                self.models[isp], self._opts[isp], inputs, targets, n_iters_adam, n_iters_lbfgs, n_iters_gn,
                 desc=f"[OnlineINR/{self.arch}][rank={rank}][sp={isp}]",
             )
             self.models[isp] = model
@@ -1022,6 +1068,12 @@ class OnlineNeuralNetworkCompressor:
                 "warm_iters_lbfgs": self.warm_iters_lbfgs,
                 "refine_iters_adam": self.refine_iters_adam,
                 "refine_iters_lbfgs": self.refine_iters_lbfgs,
+                "polish_optimizer": self.polish_optimizer,
+                "warm_iters_gn": self.warm_iters_gn,
+                "refine_iters_gn": self.refine_iters_gn,
+                "gn_n_map": self.gn_n_map,
+                "gn_init_damping": self.gn_init_damping,
+                "gn_chunk_size": self.gn_chunk_size,
                 "cold_start": cold_start,
             },
             "relative_l2_error": float(jnp.linalg.norm(diff) / l2_ref) if l2_ref > 0 else 0.0,

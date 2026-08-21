@@ -96,29 +96,50 @@ def load_compression_events(data_dir):
                     pass
     return iters, data 
 
-def _case_subdir(data_dir):
+def _pipeline_prefix(parts):
+    """("offline",), ("online",), or () depending on whether offline_compression/
+    or online_compression/ appears in a resolved path's parts.
+
+    Both pipelines nest their results as NN/<arch>/<optimizer> (or POD/r<n>) under
+    their own offline_compression/ or online_compression/ parent
+    """
+    if "online_compression" in parts:
+        return ("online",)
+    if "offline_compression" in parts:
+        return ("offline",)
+    return ()
+
+def _case_subdir(data_dir, out_dir=None):
     """Path components identifying a single NN/<arch>/<optimizer> or POD/r<n>
-    case within a results_<case_name> dir
+    case within a results_<case_name> dir, prefixed with "online"/"offline" when
+    that's determinable (see _pipeline_prefix) and out_dir isn't already scoped
+    to that same pipeline
     """
     parts = Path(data_dir).resolve().parts
+    prefix = _pipeline_prefix(parts)
+    if prefix and out_dir is not None and prefix[0] in ("online", "offline"):
+        out_parts = Path(out_dir).resolve().parts
+        if f"{prefix[0]}_compression" in out_parts:
+            prefix = ()
     for marker in ("NN", "POD"):
         if marker in parts:
             idx = parts.index(marker)
-            return parts[idx + 1:]
-    return ()
+            return prefix + parts[idx:]
+    return prefix
 
 def _case_out_dir(data_dir, out_dir):
-    subdir = out_dir.joinpath(*_case_subdir(data_dir))
+    subdir = out_dir.joinpath(*_case_subdir(data_dir, out_dir))
     subdir.mkdir(parents=True, exist_ok=True)
     return subdir
 
 def case_label(csv_path):
     p = Path(csv_path).resolve()
     parts = p.parent.parts
+    prefix = _pipeline_prefix(parts)
     for marker in ("NN", "POD"):
         if marker in parts:
             idx = parts.index(marker)
-            return "_".join(parts[idx:])
+            return "_".join(prefix + parts[idx:])
     return p.parent.name.replace("branch_","")
 
 def save_fig(fig, out_path):
@@ -345,11 +366,29 @@ def plot_inr_loss(data_dirs, out_dir):
 def resolve_out_dir(args):
     if args.output_dir:
         return Path(args.output_dir)
-    
-    base = Path(args.params[0]).resolve().parent.parent / "comparisons"
+
     if len(args.params) <= 1:
-        return base
-    
+        return Path(args.params[0]).resolve().parent.parent / "comparisons"
+
+    # Place comparisons/ inside the shared offline_compression/ or online_compression/
+    # subtree when every non-baseline path belongs to the same one (matching where
+    # NN/POD results for that pipeline actually live). Falls back to the run root
+    # (two levels above the first path) when paths mix both pipelines -- e.g.
+    # comparing an online run against its offline counterpart -- or contain none.
+    resolved = [Path(p).resolve() for p in args.params]
+    pipeline_roots = set()
+    for p in resolved:
+        for marker in ("offline_compression", "online_compression"):
+            if marker in p.parts:
+                idx = p.parts.index(marker)
+                pipeline_roots.add(Path(*p.parts[:idx + 1]))
+                break
+
+    if len(pipeline_roots) == 1:
+        base = next(iter(pipeline_roots)) / "comparisons"
+    else:
+        base = resolved[0].parent.parent / "comparisons"
+
     all_paths_str = " ".join(args.params)
     has_pod = "POD" in all_paths_str
     has_nn = "NN" in all_paths_str
@@ -389,7 +428,8 @@ def _load_final_snapshot(branch_dir, species=0):
     return fdistribu, bounds, time_saved
 
 
-def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, reduce="marginal"):
+def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, reduce="marginal",
+                                    baseline_dir=None):
     """Compare the final fdistribu snapshot of the baseline branch against every
     compressed branch found under run_dir, side by side, plus their difference.
 
@@ -398,14 +438,24 @@ def plot_final_snapshot_comparison(run_dir, plane="xvx", species=0, index=None, 
     fixed index can land in a low-density region where the reconstruction's
     pointwise noise floor dominates the picture even when the field is
     reconstructed well overall -- pass reduce="slice" to get that old behavior.
+
+    baseline_dir: explicit path to the baseline branch's directory. When not
+    given, a "branch_baseline"-named directory is searched for under run_dir
+    (old behavior). Pass it explicitly when the baseline lives outside run_dir
+    -- e.g. shared directly under the run root while run_dir is scoped to a
+    pipeline-specific subfolder like offline_compression/ or online_compression/,
+    so it would never be found by searching under run_dir alone.
     """
     branch_dirs = sorted({
         str(p.parent) for p in Path(run_dir).rglob("GYSELALIBXX_[0-9]*.h5")
     })
-    baseline_dir = next((d for d in branch_dirs if os.path.basename(d) == "branch_baseline"), None)
-    other_dirs = [d for d in branch_dirs if d != baseline_dir]
+    if baseline_dir is not None:
+        other_dirs = [d for d in branch_dirs if os.path.basename(d) != "branch_baseline"]
+    else:
+        baseline_dir = next((d for d in branch_dirs if os.path.basename(d) == "branch_baseline"), None)
+        other_dirs = [d for d in branch_dirs if d != baseline_dir]
 
-    if baseline_dir is None or not other_dirs:
+    if baseline_dir is None or not os.path.exists(baseline_dir) or not other_dirs:
         print("\nMissing baseline or compressed final snapshot -- skipping snapshot comparison plot.")
         return
 

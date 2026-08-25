@@ -24,18 +24,8 @@ set(GYSELALIBXX_INCLUDE_TESTING_DEPENDENCIES ON)
 
 
 ###############################################################################################
-#                                   List of options
-###############################################################################################
-option(GYSELA_MINI_APP_COMPILE_SOURCE "Enable compilation of the source code (this should be set to off to build documentation without the C++ dependencies)" ON)
-option(GYSELA_MINI_APP_BUILD_DOCUMENTATION "Build the documentation." OFF)
-option(GYSELA_MINI_APP_BUILD_SIMULATIONS "Build the simulations." ON)
-
-
-###############################################################################################
 #                              Build libraries and executables
 ###############################################################################################
-
-if ("${GYSELA_MINI_APP_COMPILE_SOURCE}")
 
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 
@@ -49,8 +39,4 @@ set(CMAKE_CXX_FLAGS "${GYSELALIBXX_DEFAULT_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
 add_subdirectory(src/C++)
 
 ## Build the simulations (applications mains) in `apps/`
-if("${GYSELA_MINI_APP_BUILD_SIMULATIONS}")
-    add_subdirectory(apps/)
-endif()
-
-endif() # GYSELA_MINI_APP_COMPILE_SOURCE
+add_subdirectory(apps/)

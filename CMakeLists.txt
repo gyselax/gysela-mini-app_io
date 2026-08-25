@@ -11,9 +11,6 @@ find_package(GTest "1.12" QUIET)
 ## Look for a pre-installed paraconf
 find_package(paraconf REQUIRED COMPONENTS C)
 
-set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
-add_link_options(-no-pie)
-
 ###############################################################################################
 #                           List of options for Gyselalib++ library
 ###############################################################################################

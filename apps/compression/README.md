@@ -122,7 +122,7 @@ Without `-o`, the output directory is resolved automatically: for a single `--pa
 
 | Flag | Figure | What it shows | Written to |
 | --- | --- | --- | --- |
-| `--frob` | `frob_error_comparison.png` | Relative L2 (Frobenius) reconstruction error vs. checkpoint iteration, one line per case, log scale. The core accuracy-over-time comparison across architectures/optimizers/ranks (`compression_events*.csv`'s `relative_l2_error`, averaged across MPI ranks for online cases). | `<out_dir>/global/` |
+| `--frob` | `frob_error_comparison.png` | Relative L2 (Frobenius) reconstruction error vs. checkpoint iteration, one line per case, log scale. The core accuracy-over-time comparison across architectures/optimizers (`compression_events*.csv`'s `relative_l2_error`; for online cases, combined across MPI ranks as `sqrt(Σᵢ‖diffᵢ‖²)/sqrt(Σᵢ‖fᵢ‖²)` -- the true global relative error, not a plain mean of each rank's local ratio, since ranks can hold very different `‖fᵢ‖`). | `<out_dir>/global/` |
 | `--frob-pod` | `frob_error_pod.png` | Same plot, filtered to cases whose label contains `pod`. | `<out_dir>/global/` |
 | `--frob-inr` | `frob_error_nn.png` | Same plot, filtered to cases whose label contains `nn` (i.e. every INR/NN case). | `<out_dir>/global/` |
 | `--checkpoint-time` | `checkpoint_time_<case_label>.png` | One figure **per case** (not overlaid): a stacked bar per checkpoint, compression time below decompression time, each bar annotated in seconds and minutes, total run time annotated on the figure. The wall-clock-cost counterpart to `--frob`'s accuracy view. | `<out_dir>/<online\|offline>/NN/<arch>/<optimizer>/` or `.../POD/r<n>/` (mirrors the case's own subtree) |

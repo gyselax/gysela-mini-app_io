@@ -1096,6 +1096,7 @@ class OnlineNeuralNetworkCompressor:
                 "cold_start": cold_start,
             },
             "relative_l2_error": float(jnp.linalg.norm(diff) / l2_ref) if l2_ref > 0 else 0.0,
+            "l2_ref": l2_ref,
             "max_abs_error": float(jnp.max(jnp.abs(diff))),
             "mean_abs_error": float(jnp.mean(jnp.abs(diff))),
             "rmse": float(jnp.sqrt(jnp.mean(diff ** 2))),

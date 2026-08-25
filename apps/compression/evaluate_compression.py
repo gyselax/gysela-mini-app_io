@@ -100,6 +100,15 @@ def load_compression_events(data_dir):
     """Offline writes one compression_events_offline.csv; online writes one
     compression_events_rank{NNN}.csv per MPI rank (see compression_diagnostics.py) --
     for online, average each numeric metric across ranks per checkpoint iter.
+
+    `relative_l2_error` is handled specially: each rank's value is a LOCAL ratio
+    ||diff_i||/||f_i||, and ranks can have very different ||f_i|| (e.g. an
+    uneven MPI domain decomposition in velocity space), so a plain mean of
+    ratios is not the true global relative L2 error. When `l2_ref` (||f_i||,
+    written alongside relative_l2_error) is available, combine it as
+    sqrt(sum_i ||diff_i||^2) / sqrt(sum_i ||f_i||^2) instead -- the same
+    quantity offline computes directly on its single assembled field. Falls
+    back to the plain mean for CSVs written before `l2_ref` existed.
     """
     path = Path(data_dir) / "compression_events_offline.csv"
     if path.exists():
@@ -113,6 +122,11 @@ def load_compression_events(data_dir):
     iters = per_rank[0][0]
     merged = {}
     for key in per_rank[0][1]:
+        if key == "relative_l2_error" and all("l2_ref" in d for _, d in per_rank):
+            errs = np.array([d["relative_l2_error"] for _, d in per_rank])  # (n_ranks, n_iters)
+            norms = np.array([d["l2_ref"] for _, d in per_rank])            # (n_ranks, n_iters)
+            merged[key] = list(np.sqrt(np.sum((errs * norms) ** 2, axis=0)) / np.sqrt(np.sum(norms ** 2, axis=0)))
+            continue
         cols = [d[key] for _, d in per_rank if key in d and len(d[key]) == len(iters)]
         if cols:
             merged[key] = list(np.mean(np.array(cols), axis=0))
@@ -231,20 +245,33 @@ def plot_diags(diags_filenames, output=None):
 #specific figures for compression
 
 def plot_physical(cases, quantities, out_dir):
+    conserved_names = {name for name, _ in CONSERVED_QUANTITIES}
     for q in quantities:
+        is_conserved = q in conserved_names
         fig, ax = plt.subplots(figsize=(9, 5.5))
+        plotted = False
         for label, times, data in cases:
             if q not in data:
                 continue
             style = dict(linewidth=2.5)
             if "baseline" in label.lower():
                 style.update(color="black", linestyle="--", linewidth=3.0, zorder=5)
-            ax.plot(times, data[q], label=label, **style)
+            if is_conserved:
+                q0 = data[q][0]
+                y = np.abs(data[q] - q0) / np.abs(q0)
+            else:
+                y = np.abs(data[q])
+            ax.semilogy(times, y, label=label, **style)
+            plotted = True
+        if not plotted:
+            print(f"Nothing to plot for {q}.")
+            plt.close(fig)
+            continue
         ax.set_xlabel("Time")
-        ax.set_ylabel(q)
+        ax.set_ylabel(f"|Δ{q}| / |{q}₀|" if is_conserved else f"|{q}|")
         ax.set_title(f"{q} over time")
         ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.4)
+        ax.grid(True, which="both", alpha=0.4)
         fig.tight_layout()
         save_fig(fig, out_dir / f"{q}_comparison")
         plt.close(fig)

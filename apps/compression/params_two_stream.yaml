@@ -65,17 +65,21 @@ compression:
     arch: "periodic_siren_deep_128"
     lr: 1.0e-4
     batch_size: 2000        
-    warm_iters_adam: 5000    # ADAM iterations, cold-start (first call for a given local chunk shape)
+    warm_iters_adam: 3000    # ADAM iterations, cold-start (first call for a given local chunk shape)
     warm_iters_lbfgs: 100    
     refine_iters_adam: 500   
     refine_iters_lbfgs: 10   
     polish_optimizer: "lbfgs"  # or "gauss_newton"
     warm_iters_gn: 150       
-    refine_iters_gn: 30    
+    refine_iters_gn: 150    
     gn_init_damping: 1.0e-2
     #for small_32, small_32_l5 and all small_16 archs :
     gn_n_map: 16000
-    gn_chunk_size: 300
+    gn_chunk_size: 400
+
+    #for small_32_l8 :
+    #gn_n_map: 16000
+    #gn_chunk_size: 150
 
 Output:
   nbiter_diag: 1  # diagnostics every N timesteps (must divide compression_period)

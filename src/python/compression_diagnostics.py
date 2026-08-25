@@ -63,6 +63,9 @@ def apply_online_compression(fdistribu, timestep, rank, local_bounds=None):
     if hasattr(cfg.compressor, "save_params"):
         params_path = cfg.data_dir / f"params_iter{timestep:05d}_rank{rank:03d}.npz"
         cfg.compressor.save_params(params_path, rank=rank, timestep=timestep)
+        
+    if hasattr(cfg.compressor, "save_loss_histories"):
+        cfg.compressor.save_loss_histories(cfg.data_dir / "loss_histories", timestep, rank=rank)
 
     event_path = cfg.data_dir / f"compression_events_rank{rank:03d}.csv"
 

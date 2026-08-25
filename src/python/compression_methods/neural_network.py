@@ -908,15 +908,18 @@ class OnlineNeuralNetworkCompressor:
 
     def _fit_one_species(
         self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int, n_iters_gn: int,
-        desc: str = "",
+        desc: str = "", is_warm: bool = False,
     ):
+        tag = "warm" if is_warm else "cold"
+        
         total_points = inputs.shape[0]
         bs = min(self.batch_size, total_points) if self.batch_size is not None else total_points
         loss_val = None
         best_model, best_loss = model, float("inf")
+        loss_history = []
 
         # Phase 1: ADAM, warm-started across calls, mini-batches
-        pbar = _training_progress(n_iters_adam, f"{desc}[ADAM]", self.verbose)
+        pbar = _training_progress(n_iters_adam, f"{desc}[ADAM/{tag}]", self.verbose)
         for _ in pbar:
             if bs < total_points:
                 self._key, subkey = jax.random.split(self._key)
@@ -927,6 +930,7 @@ class OnlineNeuralNetworkCompressor:
 
             loss_dict, model, opt = opt.update(model, batch)
             loss_val = float(loss_dict["total"])
+            loss_history.append(loss_val)
             pbar.set_postfix(loss=f"{loss_val:.2e}")
             if loss_val < best_loss:
                 best_model, best_loss = model, loss_val
@@ -939,10 +943,11 @@ class OnlineNeuralNetworkCompressor:
             if self.polish_optimizer == "lbfgs":
                 full_batch = (inputs, targets)
                 lbfgs_opt = ScimbaLBfgs(model, _losses_function)
-                pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS]", self.verbose)
+                pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS/{tag}]", self.verbose)
                 for _ in pbar:
                     loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
                     loss_val = float(loss_dict["total"])
+                    loss_history.append(loss_val)
                     pbar.set_postfix(loss=f"{loss_val:.2e}")
                     if loss_val < best_loss:
                         best_model, best_loss = model, loss_val
@@ -955,19 +960,24 @@ class OnlineNeuralNetworkCompressor:
                     idx = jax.random.choice(subkey, total_points, shape=(n_map,), replace=(n_map > total_points))
                     return inputs[idx], targets[idx], k
                 
+                if self.verbose:
+                    print(f"  {desc}[GaussNewton/{tag}] running {n_iters_gn} iterations "
+                            f"(n_map={self.gn_n_map}, chunk_size={self.gn_chunk_size})...")
+    
                 model, gn_loss_hist = train_map_gn(
                     self.gn_n_map, make_data, model,
                     n_iterations=n_iters_gn, init_damping=self.gn_init_damping,
                     chunk_size=self.gn_chunk_size,
                 )
                 gn_loss_hist = np.asarray(gn_loss_hist)
+                loss_history.extend(gn_loss_hist.tolist())
                 if gn_loss_hist.size:
                     best_gn_loss = float(gn_loss_hist.min())
                     loss_val = float(gn_loss_hist[-1])
                     if best_gn_loss < best_loss :
                         best_model, best_loss = model, best_gn_loss
 
-        return best_model, opt, best_loss
+        return best_model, opt, best_loss, np.array(loss_history)
 
     def _plot_local_xvx_debug(self, f_orig, f_approx, rank: Optional[int] = None):
         """Save a quick x–vx plot of local original vs reconstruction (species 0)."""
@@ -1027,15 +1037,17 @@ class OnlineNeuralNetworkCompressor:
 
         t0 = time.perf_counter()
         final_losses = []
+        self.loss_histories = []
         for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
-            model, opt, loss_val = self._fit_one_species(
+            model, opt, loss_val, loss_hist = self._fit_one_species(
                 self.models[isp], self._opts[isp], inputs, targets, n_iters_adam, n_iters_lbfgs, n_iters_gn,
-                desc=f"[OnlineINR/{self.arch}][rank={rank}][sp={isp}]",
+                desc=f"[OnlineINR/{self.arch}][rank={rank}][sp={isp}]", is_warm=not cold_start 
             )
             self.models[isp] = model
             self._opts[isp] = opt
             final_losses.append(loss_val)
+            self.loss_histories.append(loss_hist)
         t1 = time.perf_counter()
 
         recon_chunk_size = self.batch_size or _DEFAULT_RECON_CHUNK_SIZE
@@ -1127,7 +1139,17 @@ class OnlineNeuralNetworkCompressor:
                 payload[f"target_{isp}"] = self._last_local_array[isp]
 
         np.savez_compressed(path, **payload)
-
+        
+    def save_loss_histories(self, out_dir, timestep, rank: Optional[int]=None):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        rank_tag = f"{rank:03d}" if rank is not None else "na"
+        paths = []
+        for isp, hist in enumerate(self.loss_histories):
+            p = out_dir / f"loss_iter{timestep:05d}_sp{isp}_rank{rank_tag}_{self.arch}.npy"
+            np.save(p, np.asarray(hist)) 
+            paths.append(p)
+        return paths
 
 def load_online_params(path: str) -> dict:
     """Reload a payload written by `OnlineNeuralNetworkCompressor.save_params`.

@@ -19,21 +19,34 @@ Benchmark pipeline for evaluating restart-file compression in a 2D2V Vlasov--Poi
 ## Run directory layout
 
 ```text
-compression_run_YYYYMMDD_HHMMSS/
-├── branch_baseline/
-│   ├── diagnostics.csv            # in-situ conserved-variable diagnostics
-│   └── GYSELALIBXX_initstate.h5
-├── branch_compressed/
-│   ├── diagnostics.csv            # appended across restart segments
-│   └── GYSELALIBXX_*.h5          # snapshots at compression boundaries only
-├── periodic_restarts/
-│   ├── restart_iter_XXXXX_approx.h5
-│   └── restart_iter_XXXXX_compressed.npz
+results_<case_name>/                        # e.g. results_two_stream/
+├── branch_baseline/                        # shared, uncompressed reference sim -- never duplicated
 ├── config_baseline.yaml
-└── compression_events.yaml
+├── compression_events.yaml                 # legacy manifest, last-branch-wins, minor quirk
+├── pdi_out_diags.yaml
+├── offline_compression/
+│   ├── NN/<arch>/polish_<optimizer>/       # e.g. NN/periodic_siren_small_32_l5/polish_gauss_newton/
+│   ├── POD/r<n_components>/                # offline only -- online has no POD path
+│   ├── comparisons/{baseline_vs_INR,baseline_vs_POD,mixed_comparisons}/
+│   ├── config_NN_<arch>_polish_<optimizer>.yaml, config_POD_r<n>.yaml   # per-case config snapshots
+│   └── diags_comparison.png
+└── online_compression/                     # same shape as offline_compression, minus POD;
+                                             # created automatically on first --online run
 ```
 
-The baseline suppresses all intermediate HDF5 snapshots; conserved variables come entirely from in-situ diagnostics. The compressed branch writes HDF5 only at `compression_period` boundaries.
+`branch_baseline/`, `config_baseline.yaml`, `compression_events.yaml` and `pdi_out_diags.yaml` are the only things shared between the two pipelines -- everything else (results, comparisons, config snapshots, the aggregate `diags_comparison.png`) is fully separated under `offline_compression/` vs `online_compression/`. The baseline suppresses all intermediate HDF5 snapshots; conserved variables come entirely from in-situ diagnostics.
+
+Inside one `NN/<arch>/polish_<optimizer>/` (or `POD/r<n>/`) case directory, offline and online differ because offline fits one compressor over the whole assembled grid while online fits one compressor per MPI rank on its own local chunk (see the compression_methods README for that distinction):
+
+| | offline | online |
+| --- | --- | --- |
+| per-checkpoint metrics | `compression_events_offline.csv` | `compression_events_rank<NNN>.csv`, one per MPI rank |
+| training loss curves | `loss_histories/loss_iter<ITER>_sp<SP>_<arch>.npy` | `loss_histories/loss_iter<ITER>_sp<SP>_rank<NNN>_<arch>.npy`, one per rank |
+| saved network weights | `payload_iter<ITER>.npz` | `params_iter<ITER>_rank<NNN>.npz`, one per rank |
+| snapshots | `GYSELALIBXX_compressed_<ITER>.h5` per checkpoint + final `GYSELALIBXX_<ITER>.h5` | final `GYSELALIBXX_<ITER>.h5` only |
+| debug plots | `final_snapshot_comparison.png` | `final_snapshot_comparison.png` + `nn_online_local_rank<NNN>_call<CALL>_xvx.png` per rank per call |
+
+`compression_events_offline.csv` / `compression_events_rank*.csv` are the primary place to check compression quality (`relative_l2_error`, `compression_seconds`/`decompression_seconds`, etc. -- see the `--frob`/`--checkpoint-time` figures above). **Caveat**: `final_loss_per_species` in that CSV is `jnp.min()` over the *entire* loss history regardless of which model was actually deployed -- cross-check against `relative_l2_error` (the honest end-to-end metric), don't trust `final_loss` alone.
 
 ## Environment
 
@@ -93,6 +106,42 @@ python apps/compression/evaluate_compression.py diagnostics <data_dir>/branch_ba
 ```
 
 Reads one or more `diagnostics.csv` files (deduplicating restart-boundary rows) and overlays them; omit `-o` to show interactively instead of saving.
+
+## Cross-run comparisons and figures (`compare`)
+
+```bash
+python apps/compression/evaluate_compression.py compare \
+  --params <run_dir>/case1/diagnostics.csv <run_dir>/case2/diagnostics.csv ... \
+  --frob --frob-pod --frob-inr --checkpoint-time --svd-spectrum --inr-loss \
+  [-o <output_dir>]
+```
+
+Each `--params` entry is the path to a case's `diagnostics.csv` (not just the directory) -- its parent directory is where the compressor's own outputs (`compression_events*.csv`, `loss_histories/`, `svd_spectrums/`, ...) are expected to live. Every flag below is independent; pass only the ones you want. If a case is missing the data a flag needs (e.g. `--svd-spectrum` on an NN case, which has no `svd_spectrums/`), that flag is silently skipped for that case, not for the whole run.
+
+Without `-o`, the output directory is resolved automatically: for a single `--params` path, `<run_dir>/comparisons/`; for several paths sharing the same `offline_compression/`or `online_compression/` root, `<that_root>/comparisons/<baseline_vs_INR|baseline_vs_POD|mixed_comparisons>/` depending on whether the cases are NN, POD, or a mix.
+
+| Flag | Figure | What it shows | Written to |
+| --- | --- | --- | --- |
+| `--frob` | `frob_error_comparison.png` | Relative L2 (Frobenius) reconstruction error vs. checkpoint iteration, one line per case, log scale. The core accuracy-over-time comparison across architectures/optimizers/ranks (`compression_events*.csv`'s `relative_l2_error`, averaged across MPI ranks for online cases). | `<out_dir>/global/` |
+| `--frob-pod` | `frob_error_pod.png` | Same plot, filtered to cases whose label contains `pod`. | `<out_dir>/global/` |
+| `--frob-inr` | `frob_error_nn.png` | Same plot, filtered to cases whose label contains `nn` (i.e. every INR/NN case). | `<out_dir>/global/` |
+| `--checkpoint-time` | `checkpoint_time_<case_label>.png` | One figure **per case** (not overlaid): a stacked bar per checkpoint, compression time below decompression time, each bar annotated in seconds and minutes, total run time annotated on the figure. The wall-clock-cost counterpart to `--frob`'s accuracy view. | `<out_dir>/<online\|offline>/NN/<arch>/<optimizer>/` or `.../POD/r<n>/` (mirrors the case's own subtree) |
+| `--svd-spectrum` | `svd_spectrum.png` | Singular-value decay ($\sigma_i/\sigma_1$, log scale) of the **last checkpoint** for every POD case that has a `svd_spectrums/` directory, one line per case with a dashed vertical line at the retained rank (`param_n_components`). Only meaningful for POD -- NN cases produce nothing here. | `<out_dir>/global/` |
+| `--inr-loss` | `loss_iter<ITER>_sp<SP>[_rank<NNN>]_<arch>.png` (one per file) | ADAM-then-polish training loss curve (MSE, log scale) for one species at one checkpoint (one rank, for online), read from that case's `loss_histories/*.npy`. The x-axis label names the polish optimizer used (`Gauss-Newton` or `L-BFGS`, inferred from the path). Only meaningful for NN -- POD cases have no `loss_histories/`. | `<out_dir>/<online\|offline>/NN/<arch>/<optimizer>/` (one file per file already present in that case's `loss_histories/`) |
+
+### Concrete example
+
+Comparing two offline Gauss-Newton architectures against each other (from this repo's own `results_two_stream/`):
+
+```bash
+python apps/compression/evaluate_compression.py compare \
+  --params \
+    results_two_stream/offline_compression/NN/periodic_siren_small_32/polish_gauss_newton/diagnostics.csv \
+    results_two_stream/offline_compression/NN/periodic_siren_small_32_l5/polish_gauss_newton/diagnostics.csv \
+  --frob --checkpoint-time --inr-loss
+```
+
+writes `results_two_stream/offline_compression/comparisons/baseline_vs_INR/global/frob_error_comparison.png` (both archs overlaid) plus per-case `checkpoint_time_*.png` and `loss_iter*.png` under each arch's own `NN/<arch>/polish_gauss_newton/` subtree. Add a POD case's `diagnostics.csv` to the same `--params` list and `--svd-spectrum` becomes meaningful too (and the output root becomes `mixed_comparisons/` since the cases now mix NN and POD).
 
 ## Online (in-situ) neural-network compressor
 

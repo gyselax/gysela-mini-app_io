@@ -932,6 +932,7 @@ def run_pipeline(args):
             "params": {
                 "arch": args.arch_nn if getattr(args, 'arch_nn', None) else nn_cfg.get("arch", "periodic_siren_deep_128"),
                 "lr": float(nn_cfg.get("lr", 1e-3)),
+                "lr_decay_alpha": float(nn_cfg.get("lr_decay_alpha", 0.01)),
                 "max_iters": int(nn_cfg.get("max_iters", 2000)),
                 "warm_max_iters": int(nn_cfg.get("warm_max_iters", nn_cfg.get("max_iters", 2000))),
                 "batch_size": int(nn_cfg.get("batch_size", 2000)),
@@ -949,8 +950,9 @@ def run_pipeline(args):
     online_method_override = {
         "arch": args.arch_nn if getattr(args, 'arch_nn', None) else online_nn_cfg.get("arch", "periodic_siren_deep_128"),
         "lr": float(online_nn_cfg.get("lr", 1e-4)),
+        "lr_decay_alpha": float(online_nn_cfg.get("lr_decay_alpha", 0.01)),
         "batch_size": int(online_nn_cfg.get("batch_size", 2000)),
-        "warm_iters_adam": int(online_nn_cfg.get("warm_iters_adam", 5000)),
+        "warm_iters_adam": int(online_nn_cfg.get("warm_iters_adam", 3000)),
         "warm_iters_lbfgs": int(online_nn_cfg.get("warm_iters_lbfgs", 100)),
         "refine_iters_adam": int(online_nn_cfg.get("refine_iters_adam", 500)),
         "refine_iters_lbfgs": int(online_nn_cfg.get("refine_iters_lbfgs", 10)),

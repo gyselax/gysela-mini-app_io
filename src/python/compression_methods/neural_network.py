@@ -815,12 +815,8 @@ class OnlineNeuralNetworkCompressor:
     `local_bounds`, if passed, is stored so `assemble_global_field` can later
     map each rank's unit cell back to physical space.
 
-    Runs inside the live timestepping loop, so models and ADAM state persist
-    across calls (warm start): only `refine_iters_adam`/`refine_iters_lbfgs`
-    steps run after the first call for a given chunk shape (`warm_iters_adam`
-    /`warm_iters_lbfgs` on cold start). Same two-phase ADAM + L-BFGS routine
-    as `NeuralNetworkCompressor` above; the L-BFGS optimizer is re-instantiated
-    fresh each call since its history is only meaningful right after ADAM.
+    Runs inside the live timestepping loop, so models persist
+    across calls (warm start)
     """
 
     method_name = "OnlineNeuralNetwork"
@@ -829,6 +825,7 @@ class OnlineNeuralNetworkCompressor:
         self,
         arch: str = "periodic_siren_small_32",
         lr: float = 1e-3,
+        lr_decay_alpha: float = 0.01,
         warm_iters_adam: int = 200,
         warm_iters_lbfgs: int = 20,
         refine_iters_adam: int = 20,
@@ -863,6 +860,7 @@ class OnlineNeuralNetworkCompressor:
 
         self.arch = arch
         self.lr = float(lr)
+        self.lr_decay_alpha = float(lr_decay_alpha)
         self.warm_iters_adam = int(warm_iters_adam)
         self.warm_iters_lbfgs = int(warm_iters_lbfgs)
         self.refine_iters_adam = int(refine_iters_adam)
@@ -882,7 +880,6 @@ class OnlineNeuralNetworkCompressor:
 
         self._key = jax.random.PRNGKey(self.seed)
         self.models: Optional[list] = None        # one eqx.Module per species, warm-started
-        self._opts: Optional[list] = None          # one ScimbaAdam per species, warm-started
         self.local_shape: Optional[tuple] = None   # (nx, ny, nvx, nvy) of the local chunk
         self.local_bounds: Optional[tuple] = None  # physical bbox of the local chunk, if known
         self.n_calls = 0
@@ -907,7 +904,7 @@ class OnlineNeuralNetworkCompressor:
         return jnp.stack([Xg.ravel(), Yg.ravel(), VXg.ravel(), VYg.ravel()], axis=-1)
 
     def _fit_one_species(
-        self, model, opt, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int, n_iters_gn: int,
+        self, model, inputs: jnp.ndarray, targets: jnp.ndarray, n_iters_adam: int, n_iters_lbfgs: int, n_iters_gn: int,
         desc: str = "", is_warm: bool = False,
     ):
         tag = "warm" if is_warm else "cold"
@@ -917,6 +914,15 @@ class OnlineNeuralNetworkCompressor:
         loss_val = None
         best_model, best_loss = model, float("inf")
         loss_history = []
+        
+        if is_warm:
+            learning_rate = optax.cosine_decay_schedule(
+                init_value=self.lr, decay_steps=n_iters_adam, alpha=self.lr_decay_alpha
+            )
+        else:
+            learning_rate = self.lr 
+        
+        opt = ScimbaAdam(model, _losses_function, learning_rate=learning_rate)
 
         # Phase 1: ADAM, warm-started across calls, mini-batches
         pbar = _training_progress(n_iters_adam, f"{desc}[ADAM/{tag}]", self.verbose)
@@ -977,7 +983,7 @@ class OnlineNeuralNetworkCompressor:
                     if best_gn_loss < best_loss :
                         best_model, best_loss = model, best_gn_loss
 
-        return best_model, opt, best_loss, np.array(loss_history)
+        return best_model, best_loss, np.array(loss_history)
 
     def _plot_local_xvx_debug(self, f_orig, f_approx, rank: Optional[int] = None):
         """Save a quick x–vx plot of local original vs reconstruction (species 0)."""
@@ -1028,7 +1034,6 @@ class OnlineNeuralNetworkCompressor:
             keys = jax.random.split(self._key, n_species + 1)
             self._key = keys[0]
             self.models = [get_inr_model(self.arch, keys[i + 1]) for i in range(n_species)]
-            self._opts = [ScimbaAdam(self.models[i], _losses_function, learning_rate=self.lr) for i in range(n_species)]
 
         inputs = self._build_local_inputs(nx, ny, nvx, nvy)
         n_iters_adam = self.warm_iters_adam if cold_start else self.refine_iters_adam
@@ -1040,12 +1045,11 @@ class OnlineNeuralNetworkCompressor:
         self.loss_histories = []
         for isp in range(n_species):
             targets = f[isp].reshape(-1, 1)
-            model, opt, loss_val, loss_hist = self._fit_one_species(
-                self.models[isp], self._opts[isp], inputs, targets, n_iters_adam, n_iters_lbfgs, n_iters_gn,
+            model, loss_val, loss_hist = self._fit_one_species(
+                self.models[isp], inputs, targets, n_iters_adam, n_iters_lbfgs, n_iters_gn,
                 desc=f"[OnlineINR/{self.arch}][rank={rank}][sp={isp}]", is_warm=not cold_start 
             )
             self.models[isp] = model
-            self._opts[isp] = opt
             final_losses.append(loss_val)
             self.loss_histories.append(loss_hist)
         t1 = time.perf_counter()
@@ -1276,9 +1280,6 @@ def continue_training_offline(
             get_inr_model(use_arch, keys[isp + 1]) if isp in species_idx else payload["models"][isp]
             for isp in range(n_species)
         ]
-    compressor._opts = [
-        ScimbaAdam(compressor.models[isp], _losses_function, learning_rate=lr) for isp in range(n_species)
-    ]
 
     _, metrics = compressor.compress_decompress_array(
         target, rank=payload.get("rank"), local_bounds=payload["local_bounds"]

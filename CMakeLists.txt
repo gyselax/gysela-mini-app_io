@@ -20,7 +20,6 @@ add_link_options(-no-pie)
 set(GYSELALIBXX_BUILD_TESTING OFF)
 set(GYSELALIBXX_BUILD_SIMULATIONS OFF)
 set(GYSELALIBXX_BUILD_DOCUMENTATION OFF)
-set(GYSELALIBXX_INCLUDE_TESTING_DEPENDENCIES ON)
 
 
 ###############################################################################################

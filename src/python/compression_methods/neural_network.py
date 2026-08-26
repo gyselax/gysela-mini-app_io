@@ -815,8 +815,10 @@ class OnlineNeuralNetworkCompressor:
     `local_bounds`, if passed, is stored so `assemble_global_field` can later
     map each rank's unit cell back to physical space.
 
-    Runs inside the live timestepping loop, so models persist
-    across calls (warm start)
+    Runs inside the live timestepping loop, so models persist across calls
+    (warm start); the ADAM optimizer itself is re-instantiated fresh each call
+    (no momentum carry-over), with a cosine LR decay on warm-started calls only
+    (constant lr on cold start) -- mirrors NeuralNetworkCompressor above.
     """
 
     method_name = "OnlineNeuralNetwork"
@@ -836,6 +838,7 @@ class OnlineNeuralNetworkCompressor:
         gn_n_map: int = 16000,
         gn_init_damping: float = 1e-2,
         gn_chunk_size: int = 2000,
+        lbfgs_chunk_size: int = 200_000,
         batch_size: Optional[int] = None,
         threshold: float = 1e-8,
         seed: int = 42,
@@ -871,12 +874,15 @@ class OnlineNeuralNetworkCompressor:
         self.gn_n_map = int(gn_n_map)
         self.gn_init_damping = float(gn_init_damping)
         self.gn_chunk_size = int(gn_chunk_size)
+        self.lbfgs_chunk_size = int(lbfgs_chunk_size)
         self.batch_size = int(batch_size) if batch_size is not None else None
         self.threshold = float(threshold)
         self.seed = int(seed)
         self.verbose = bool(verbose)
         self.debug_plot = bool(debug_plot)
         self.save_target = bool(save_target)
+        
+        self._chunked_losses_fn = make_chunked_losses_function(self.lbfgs_chunk_size)
 
         self._key = jax.random.PRNGKey(self.seed)
         self.models: Optional[list] = None        # one eqx.Module per species, warm-started
@@ -891,7 +897,7 @@ class OnlineNeuralNetworkCompressor:
             f"warm_iters_adam={self.warm_iters_adam}, warm_iters_lbfgs={self.warm_iters_lbfgs}, warm_iters_gn={self.warm_iters_gn}, "
             f"refine_iters_adam={self.refine_iters_adam}, refine_iters_lbfgs={self.refine_iters_lbfgs}, refine_iters_gn={self.refine_iters_gn}, "
             f"polish_optimizer={self.polish_optimizer}, "
-            f"gn_n_map={self.gn_n_map}, gn_init_damping={self.gn_init_damping}, gn_chunk_size={self.gn_chunk_size} )"
+            f"gn_n_map={self.gn_n_map}, gn_init_damping={self.gn_init_damping}, gn_chunk_size={self.gn_chunk_size}, lbfgs_chunk_size={self.lbfgs_chunk_size} )"
         )
 
     @staticmethod
@@ -920,7 +926,7 @@ class OnlineNeuralNetworkCompressor:
                 init_value=self.lr, decay_steps=n_iters_adam, alpha=self.lr_decay_alpha
             )
         else:
-            learning_rate = self.lr 
+            learning_rate = self.lr
         
         opt = ScimbaAdam(model, _losses_function, learning_rate=learning_rate)
 
@@ -948,7 +954,7 @@ class OnlineNeuralNetworkCompressor:
         if n_iters_polish > 0 and (loss_val is None or loss_val >= self.threshold):
             if self.polish_optimizer == "lbfgs":
                 full_batch = (inputs, targets)
-                lbfgs_opt = ScimbaLBfgs(model, _losses_function)
+                lbfgs_opt = ScimbaLBfgs(model, self._chunked_losses_fn)
                 pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS/{tag}]", self.verbose)
                 for _ in pbar:
                     loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
@@ -1047,7 +1053,7 @@ class OnlineNeuralNetworkCompressor:
             targets = f[isp].reshape(-1, 1)
             model, loss_val, loss_hist = self._fit_one_species(
                 self.models[isp], inputs, targets, n_iters_adam, n_iters_lbfgs, n_iters_gn,
-                desc=f"[OnlineINR/{self.arch}][rank={rank}][sp={isp}]", is_warm=not cold_start 
+                desc=f"[OnlineINR/{self.arch}][rank={rank}][sp={isp}]", is_warm=not cold_start
             )
             self.models[isp] = model
             final_losses.append(loss_val)
@@ -1093,6 +1099,7 @@ class OnlineNeuralNetworkCompressor:
                 "gn_n_map": self.gn_n_map,
                 "gn_init_damping": self.gn_init_damping,
                 "gn_chunk_size": self.gn_chunk_size,
+                "lbfgs_chunk_size": self.lbfgs_chunk_size,
                 "cold_start": cold_start,
             },
             "relative_l2_error": float(jnp.linalg.norm(diff) / l2_ref) if l2_ref > 0 else 0.0,
@@ -1271,7 +1278,7 @@ def continue_training_offline(
     # call runs exactly `iters_adam` + `iters_lbfgs` steps.
     compressor.local_shape = payload["local_shape"]
     compressor.local_bounds = payload["local_bounds"]
-
+    
     if reuse_weights:
         compressor.models = list(payload["models"])
     else:
@@ -1281,6 +1288,8 @@ def continue_training_offline(
             get_inr_model(use_arch, keys[isp + 1]) if isp in species_idx else payload["models"][isp]
             for isp in range(n_species)
         ]
+
+
 
     _, metrics = compressor.compress_decompress_array(
         target, rank=payload.get("rank"), local_bounds=payload["local_bounds"]

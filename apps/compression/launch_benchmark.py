@@ -962,6 +962,7 @@ def run_pipeline(args):
         "gn_n_map": int(online_nn_cfg.get("gn_n_map", 16000)),
         "gn_init_damping": float(online_nn_cfg.get("gn_init_damping", 1e-2)),
         "gn_chunk_size": int(online_nn_cfg.get("gn_chunk_size", 2000)),
+        "lbfgs_chunk_size": int(online_nn_cfg.get("lbfgs_chunk_size", 200_000)),
         "verbose": bool(online_nn_cfg.get("verbose", True)),
         "debug_plot": bool(online_nn_cfg.get("debug_plot", True)),
     }

@@ -15,17 +15,26 @@ MPI contention; 300 survived cleanly across 5 compression events. Same pattern
 as gauss_newton_real_pipeline_experiment.py: reuse the REAL production class via
 a thin subclass instead of the full launch_benchmark.py CLI / MPI machinery.
 `_fit_one_species` below is a verbatim copy of OnlineNeuralNetworkCompressor's
-own method (src/python/compression_methods/neural_network.py) with two probe()
-calls added around the Gauss-Newton branch -- if that method changes, re-sync
-this copy by hand (same tradeoff the GN experiment script already accepts for
-its own copied Phase 1).
+own method (src/python/compression_methods/neural_network.py) with probe()
+calls added around the L-BFGS and Gauss-Newton branches -- if that method
+changes, re-sync this copy by hand (same tradeoff the GN experiment script
+already accepts for its own copied Phase 1).
+
+2026-08-26: also used to test unchunked L-BFGS under real 4-rank contention --
+it OOM'd on every one of 5 checkpoints, every rank, requesting ~10.9GiB in one
+shot (see [[project-online-distributed-pipeline-port]]). `lbfgs_chunk_size`
+was then ported from the offline compressor (same `make_chunked_losses_function`
+factory, already validated there) to fix this; safe value under 4-rank
+contention not yet swept with this tool -- do that before trusting the
+`lbfgs_chunk_size: 200000` placeholder currently in params_two_stream.yaml
+(offline's own default, never tuned for online's contention regime).
 
 Caveat: no physics simulation runs concurrently here (gys_compress/Kokkos,
 which in the real online pipeline shares the same GPU too), so this
 UNDER-estimates true contention somewhat -- treat results as an upper bound on
 available memory, not an exact match to a real run. Re-validate any new
-gn_chunk_size/gn_n_map with the full pipeline (launch_benchmark.py --online)
-before trusting it in production.
+gn_chunk_size/gn_n_map/lbfgs_chunk_size with the full pipeline
+(launch_benchmark.py --online) before trusting it in production.
 
 Usage:
     python src/tests/gpu_memory_probe.py --nprocs 4 --gn-chunk-size 300 \
@@ -33,6 +42,11 @@ Usage:
 
     # push it further to find a new breaking point after an arch/nprocs change:
     python src/tests/gpu_memory_probe.py --nprocs 4 --gn-chunk-size 1000
+
+    # sweep lbfgs_chunk_size instead (start well below offline's 200000,
+    # unchunked/effectively-infinite chunk_size is known to OOM every rank):
+    python src/tests/gpu_memory_probe.py --nprocs 4 --polish-optimizer lbfgs \
+        --arch periodic_siren_small_32_l5 --lbfgs-chunk-size 50000
 """
 
 import argparse
@@ -148,12 +162,13 @@ def build_probed_compressor_class():
     `import jax` (transitively pulled in by compression_methods.neural_network)
     -- see launch_benchmark.py's own top-of-file fix for why."""
     from compression_methods.neural_network import (
-        OnlineNeuralNetworkCompressor, ScimbaLBfgs, _losses_function, _training_progress, train_map_gn,
+        OnlineNeuralNetworkCompressor, ScimbaAdam, ScimbaLBfgs, _losses_function, _training_progress, train_map_gn,
     )
     import jax
+    import optax
 
     class ProbedOnlineNeuralNetworkCompressor(OnlineNeuralNetworkCompressor):
-        """OnlineNeuralNetworkCompressor with probe() calls bracketing Gauss-Newton."""
+        """OnlineNeuralNetworkCompressor with probe() calls bracketing L-BFGS and Gauss-Newton."""
 
         def compress_decompress_array(self, array, rank=None, local_bounds=None):
             self._probe_rank = rank
@@ -161,15 +176,28 @@ def build_probed_compressor_class():
             return super().compress_decompress_array(array, rank=rank, local_bounds=local_bounds)
 
         def _fit_one_species(
-            self, model, opt, inputs, targets, n_iters_adam, n_iters_lbfgs, n_iters_gn, desc: str = "",
+            self, model, inputs, targets, n_iters_adam, n_iters_lbfgs, n_iters_gn,
+            desc: str = "", is_warm: bool = False,
         ):
             rank = getattr(self, "_probe_rank", None)
+            tag = "warm" if is_warm else "cold"
+
             total_points = inputs.shape[0]
             bs = min(self.batch_size, total_points) if self.batch_size is not None else total_points
             loss_val = None
             best_model, best_loss = model, float("inf")
+            loss_history = []
 
-            pbar = _training_progress(n_iters_adam, f"{desc}[ADAM]", self.verbose)
+            if is_warm:
+                learning_rate = optax.cosine_decay_schedule(
+                    init_value=self.lr, decay_steps=n_iters_adam, alpha=self.lr_decay_alpha
+                )
+            else:
+                learning_rate = self.lr
+
+            opt = ScimbaAdam(model, _losses_function, learning_rate=learning_rate)
+
+            pbar = _training_progress(n_iters_adam, f"{desc}[ADAM/{tag}]", self.verbose)
             for _ in pbar:
                 if bs < total_points:
                     self._key, subkey = jax.random.split(self._key)
@@ -179,6 +207,7 @@ def build_probed_compressor_class():
                     batch = (inputs, targets)
                 loss_dict, model, opt = opt.update(model, batch)
                 loss_val = float(loss_dict["total"])
+                loss_history.append(loss_val)
                 pbar.set_postfix(loss=f"{loss_val:.2e}")
                 if loss_val < best_loss:
                     best_model, best_loss = model, loss_val
@@ -189,16 +218,19 @@ def build_probed_compressor_class():
             if n_iters_polish > 0 and (loss_val is None or loss_val >= self.threshold):
                 if self.polish_optimizer == "lbfgs":
                     full_batch = (inputs, targets)
-                    lbfgs_opt = ScimbaLBfgs(model, _losses_function)
-                    pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS]", self.verbose)
+                    lbfgs_opt = ScimbaLBfgs(model, self._chunked_losses_fn)
+                    probe("pre_lbfgs", rank, self.n_calls)
+                    pbar = _training_progress(n_iters_lbfgs, f"{desc}[L-BFGS/{tag}]", self.verbose)
                     for _ in pbar:
                         loss_dict, model, lbfgs_opt = lbfgs_opt.update(model, full_batch)
                         loss_val = float(loss_dict["total"])
+                        loss_history.append(loss_val)
                         pbar.set_postfix(loss=f"{loss_val:.2e}")
                         if loss_val < best_loss:
                             best_model, best_loss = model, loss_val
                         if loss_val < self.threshold:
                             break
+                    probe("post_lbfgs", rank, self.n_calls)
                 else:  # gauss_newton
                     def make_data(n_map, k):
                         k, subkey = jax.random.split(k)
@@ -213,13 +245,14 @@ def build_probed_compressor_class():
                     )
                     probe("post_gn", rank, self.n_calls)
                     gn_loss_hist = np.asarray(gn_loss_hist)
+                    loss_history.extend(gn_loss_hist.tolist())
                     if gn_loss_hist.size:
                         best_gn_loss = float(gn_loss_hist.min())
                         loss_val = float(gn_loss_hist[-1])
                         if best_gn_loss < best_loss:
                             best_model, best_loss = model, best_gn_loss
 
-            return best_model, opt, best_loss
+            return best_model, best_loss, np.array(loss_history)
 
     return ProbedOnlineNeuralNetworkCompressor
 
@@ -252,6 +285,7 @@ def worker_main(args):
         gn_n_map=args.gn_n_map,
         gn_init_damping=args.gn_init_damping,
         gn_chunk_size=args.gn_chunk_size,
+        lbfgs_chunk_size=args.lbfgs_chunk_size,
         seed=42 + args.rank,  # mirrors compression_config.py's build_online_compressor rank-seed convention
         verbose=args.verbose,
     )
@@ -286,6 +320,7 @@ def build_arg_parser():
     parser.add_argument("--gn-n-map", type=int, default=16000)
     parser.add_argument("--gn-init-damping", type=float, default=1e-2)
     parser.add_argument("--gn-chunk-size", type=int, default=300)
+    parser.add_argument("--lbfgs-chunk-size", type=int, default=200_000)
     parser.add_argument("--params-yaml", default=DEFAULT_PARAMS_YAML)
     parser.add_argument("--out-dir", default="gpu_memory_probe_out")
     parser.add_argument("--verbose", action="store_true")

@@ -42,9 +42,6 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
 ## Link to Gyselalibxx++ library
 add_subdirectory(src/external/gyselalibxx)
 
-## Change the C++ flags to the Gyselalibxx++ specific ones
-set(CMAKE_CXX_FLAGS "${GYSELALIBXX_DEFAULT_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
-
 ## Build the C++ source library in `src/C++/`
 add_subdirectory(src/C++)
 

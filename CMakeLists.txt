@@ -3,11 +3,6 @@
 cmake_minimum_required(VERSION 3.25)
 project(gysela-mini-app_io C CXX)
 
-## Use CTest for running tests
-include(CTest)
-
-find_package(GTest "1.12" QUIET)
-
 ## Look for a pre-installed paraconf
 find_package(paraconf REQUIRED COMPONENTS C)
 

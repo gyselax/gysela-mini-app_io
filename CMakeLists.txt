@@ -6,9 +6,6 @@ project(gysela-mini-app_io C CXX)
 ## Look for a pre-installed paraconf
 find_package(paraconf REQUIRED COMPONENTS C)
 
-set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
-add_link_options(-no-pie)
-
 ###############################################################################################
 #                           List of options for Gyselalib++ library
 ###############################################################################################

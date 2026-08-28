@@ -50,16 +50,12 @@ compression:
     gn_iters: 150
     gn_init_damping: 1.0e-2 
     #for small_32 and small_16 :  
-    #gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration 
-    #gn_chunk_size: 2000  # points per jax.lax.scan step for the Gauss-Newton Jacobian (bounds peak GPU memory independent of gn_n_map)
-    
-    #for small_32_l5 :
-    gn_n_map: 16000
-    gn_chunk_size: 800
+    gn_n_map: 16000       # Gauss-Newton mini-batch size per iteration 
+    gn_chunk_size: 2000  # points per jax.lax.scan step for the Gauss-Newton Jacobian (bounds peak GPU memory independent of gn_n_map)
 
     #small_32_l8 :
     #gn_n_map: 24000
-    #gn_chunk_size: 400
+    #gn_chunk_size: 1000
 
   online_NN:
     arch: "periodic_siren_deep_128"
@@ -68,7 +64,7 @@ compression:
     warm_iters_adam: 5000    # ADAM iterations, cold-start (first call for a given local chunk shape)
     warm_iters_lbfgs: 100
     refine_iters_adam: 500
-    refine_iters_lbfgs: 50
+    refine_iters_lbfgs: 10
     lbfgs_chunk_size: 200000  
     polish_optimizer: "lbfgs"  # or "gauss_newton"
     warm_iters_gn: 200       
@@ -80,7 +76,6 @@ compression:
 
     #for small_32_l8 :
     #gn_n_map: 16000
-    #gn_chunk_size: 150
     #gn_chunk_size: 150
 
 Output:

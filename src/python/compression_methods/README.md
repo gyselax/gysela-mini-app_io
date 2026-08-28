@@ -57,7 +57,7 @@ online alike -- are measured on the Xeon(physics)/GPU-V100(training) split node 
 | `small_16_l5` | L-BFGS | 4.36% | 280s | 14319x |
 | `small_16_l8` (alternative) | Gauss-Newton | 0.32% | 88s | 8783x |
 | `small_16_l8` | L-BFGS | 4.76% | 343s | 8783x |
-| `deep_128` (highest-capacity arch) | L-BFGS (GN forbidden) | 3.78% | 930s | 277x |
+| `deep_128` (highest-capacity arch) | L-BFGS (GN forbidden) | 3.78% | 633s | 277x |
 
 Gauss-Newton beats L-BFGS on every architecture except `small_32_l8`, where the pattern
 flips (16.2% GN vs 9.75% L-BFGS): `small_32_l8` overfits under GN -- 8 SIREN layers have

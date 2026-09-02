@@ -15,8 +15,6 @@ set(GYSELALIBXX_BUILD_DOCUMENTATION OFF)
 #                              Build libraries and executables
 ###############################################################################################
 
-set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
-
 ## Link to Gyselalibxx++ library
 add_subdirectory(src/external/gyselalibxx)
 

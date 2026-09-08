@@ -202,11 +202,21 @@ def measure(cfg, f, Efield, it, t_actual):
 
 deisa = Deisa()
 
+compression_time = 0.0
+diagnostics_time = 0.0
+
 @deisa.register("fdistribu_offline")
 def compute_offline_compression(fdistribu_chunks):
-    timestep = int(fdistribu_chunks[0].t)
+    global compression_time
+    t0 = time.time()
 
+    timestep = int(fdistribu_chunks[0].t)
+    
+    print(f"Starting compression of iter {timestep} at time {time.time()}", flush=True)
     compression_diagnostics.run_offline_compression_on_global_array(fdistribu_chunks[0], timestep)
+    print(f"Finished compression of iter {timestep} at time {time.time()}", flush=True)
+
+    compression_time += time.time() - t0
 
 @deisa.register("fdistribu_reduced", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
 def compute_reduced_diagnostics(reduced, deltat, mx, my, mvx, mvy):
@@ -223,6 +233,8 @@ def compute_reduced_diagnostics(reduced, deltat, mx, my, mvx, mvy):
 
 @deisa.register("fdistribu", "absolute_time", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
 def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
+    global diagnostics_time
+    t0 = time.time()
 
     if _MEASURE_CFG is None:
         init_measure_config(
@@ -249,6 +261,7 @@ def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
         sp_cfg = Config(paths=PathsConfig(data_dir), grid=cfg.grid)
         measure(sp_cfg, fdistribu[0][isp], Efield, timestep, t_actual)
 
+    diagnostics_time += time.time() - t0
 
 samplers = {
     "all_callbacks": MemorySampler(),
@@ -264,7 +277,8 @@ with (
     deisa.execute_callbacks()
 
     print("Time analytics:", time.time() - t0, flush=True)
-
+    print("Time compression:", compression_time, flush=True)
+    print("Time diagnostics:", diagnostics_time, flush=True)
 # Save plots
 plots = {
     "all_callbacks": "mem_consumption_analytics.png",

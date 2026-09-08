@@ -307,7 +307,7 @@ int main(int argc, char **argv) {
     compression_period = static_cast<int>(
         PCpp_int(configs.conf_gyselax, ".CompressionBenchmark.compression_period"));
   }
-  int compression_mode = 1;  // 0 = none, 1 = online (pycall), 2 = offline (deisa-dask)
+  int compression_mode = 2;  // 0 = none, 1 = online (pycall), 2 = offline (deisa-dask)
   if (!PC_status(PC_get(configs.conf_gyselax, ".CompressionBenchmark.compression_mode"))) {
     compression_mode = static_cast<int>(
         PCpp_int(configs.conf_gyselax, ".CompressionBenchmark.compression_mode"));

@@ -186,7 +186,9 @@ plugins:
               compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
             # Offline Compression
             elif int(compression_mode) == 2:
+              tsend = time.time()
               bridge.send("fdistribu_offline", fdistribu, timestep)
+              print(f"Time send fdistribu: {time.time() - tsend} --", flush=True)
 
           if timestep % int(nbstep_diag) == 0:
             if diag_mode == 1:
@@ -238,14 +240,16 @@ plugins:
               compression_diagnostics.apply_online_compression(fdistribu, timestep, comm.Get_rank())
             # Offline Compression
             elif int(compression_mode) == 2:
-              bridge.send("fdistribu_offline", fdistribu, timestep)
+              tsend = time.time()
+              bridge.send("fdistribu_offline", fdistribu, timestep, update_workers=True)
+              print(f"Time send fdistribu: {time.time() - tsend} --", flush=True)
 
           if diag_mode == 1:
             # Reduced diagnostics: local partial sums, finished by the fdistribu_reduced callback
             partial = reduced_diagnostics.local_reduce(fdistribu, local_fdistribu_starts, MeshVx, MeshVy, nsp_global)
             bridge.send("fdistribu_reduced", partial[None], timestep)
           elif diag_mode == 2:
-            # Reduced diagnostics: local partial sums to csv, finished post hoc (deisa bypassed)
+            # Reduced diagnostics: local partial sums to csv, finished post hoc (deisa bypassed / post-hoc finalization)
             partial = reduced_diagnostics.local_reduce(fdistribu, local_fdistribu_starts, MeshVx, MeshVy, nsp_global)
             reduced_diagnostics.append_partial_csv(partial, timestep, float(t), rank)
           else:
@@ -315,9 +319,5 @@ plugins:
           dataset_selection:
             size: [ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]' ]
             start: [ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]' ]
-    - file: 'GYSELALIBXX_initstate.h5'
-      on_event: [initial_state]
-      collision_policy: replace_and_warn
-      write: [Nx_spline_cells, Nvx_spline_cells, MeshX, MeshY, MeshVx, MeshVy, nbstep_diag, Nkinspecies, fdistribu_charges, fdistribu_masses, fdistribu_eq]
   #trace: ~
 

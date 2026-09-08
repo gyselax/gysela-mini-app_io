@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Post hoc finalisation of the per-rank partial diagnostics written with GYS_DIAG_MODE=2."""
 
+import time
 import argparse
 import csv
 from collections import defaultdict
@@ -47,5 +48,7 @@ def main():
 
 
 if __name__ == "__main__":
+    t0 = time.time()
     main()
+    print("Time post-hoc diagnostics:", time.time() - t0, flush=True)
 

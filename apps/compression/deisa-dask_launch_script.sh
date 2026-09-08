@@ -25,6 +25,8 @@ BASE_DIR="$(cd $SCRIPT_DIR/../.. && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(cd $SCRIPT_DIR/../.. && pwd)"
 
+unset LUA_PATH LUA_CPATH
+
 ANALYTICS_FILE="${ANALYTICS_ARG:-$BASE_DIR/src/python/diagnostics.py}"
 
 SCHEFILE="$BASE_DIR/scheduler.json"
@@ -33,7 +35,7 @@ rm -f $SCHEFILE
 cd $SCRIPT_DIR
 
 echo "Launch scheduler"
-dask-scheduler --scheduler-file=$SCHEFILE &
+dask scheduler --scheduler-file=$SCHEFILE &
 dask_sch_pid=$!
 
 while ! [ -f $SCHEFILE ]; do
@@ -44,7 +46,7 @@ done
 export DEISA_DASK_SCHEDULER_ADDRESS=$(jq -r '.["address"]' $SCHEFILE)
 
 echo "Launch workers"
-dask-worker \
+dask worker \
 	--nworkers ${DASK_WORKERS} \
 	--local-directory /tmp \
 	--scheduler-file=${SCHEFILE} &
@@ -57,7 +59,7 @@ python3 $ANALYTICS_FILE &
 analytics_pid=$!
 
 echo "Launch simulation"
-mpirun -n $SIMU_NODES $BASE_DIR/build/apps/compression/gys_compress \
+srun -n $SIMU_NODES $BASE_DIR/build/apps/compression/gys_compress \
 	$SCRIPT_DIR/$GYSELA_PARAMS \
 	$SCRIPT_DIR/$PDI_CONFIG &
 simu_pid=$!

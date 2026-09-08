@@ -1,5 +1,6 @@
 """In-situ diagnostics: conserved-variable calculations and deisa analytics callback."""
 
+import time
 import csv
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,9 +9,13 @@ import dask.array as da
 import numpy as np
 from deisa.dask import Deisa
 from distributed import get_client
+from distributed.diagnostics import MemorySampler
 
 import compression_diagnostics
 import reduced_diagnostics
+
+import pandas as pd
+import matplotlib.pyplot as plt
 
 _MEASURE_CFG = None
 
@@ -197,15 +202,21 @@ def measure(cfg, f, Efield, it, t_actual):
 
 deisa = Deisa()
 
+compression_time = 0.0
+diagnostics_time = 0.0
+
 @deisa.register("fdistribu_offline")
 def compute_offline_compression(fdistribu_chunks):
+    global compression_time
+    t0 = time.time()
+
     timestep = int(fdistribu_chunks[0].t)
-    fdistribu_global = np.array(fdistribu_chunks[0])
+    
+    print(f"Starting compression of iter {timestep} at time {time.time()}", flush=True)
+    compression_diagnostics.run_offline_compression_on_global_array(fdistribu_chunks[0], timestep)
+    print(f"Finished compression of iter {timestep} at time {time.time()}", flush=True)
 
-    compression_diagnostics.run_offline_compression_on_global_array(fdistribu_global, timestep)
-
-    deisa.set("fdistribu_offline_done", True, timestep=timestep)
-
+    compression_time += time.time() - t0
 
 @deisa.register("fdistribu_reduced", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
 def compute_reduced_diagnostics(reduced, deltat, mx, my, mvx, mvy):
@@ -222,6 +233,8 @@ def compute_reduced_diagnostics(reduced, deltat, mx, my, mvx, mvy):
 
 @deisa.register("fdistribu", "absolute_time", "deltat", "MeshX", "MeshY", "MeshVx", "MeshVy")
 def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
+    global diagnostics_time
+    t0 = time.time()
 
     if _MEASURE_CFG is None:
         init_measure_config(
@@ -248,8 +261,46 @@ def compute_diagnostics(fdistribu, time, deltat, mx, my, mvx, mvy):
         sp_cfg = Config(paths=PathsConfig(data_dir), grid=cfg.grid)
         measure(sp_cfg, fdistribu[0][isp], Efield, timestep, t_actual)
 
+    diagnostics_time += time.time() - t0
 
-deisa.execute_callbacks()
+samplers = {
+    "all_callbacks": MemorySampler(),
+    "spilled_memory": MemorySampler(),
+}
+
+with (
+    samplers["all_callbacks"].sample("all_callbacks"),
+    samplers["spilled_memory"].sample("spilled_memory", measure="spilled"),
+):
+    t0 = time.time()
+    
+    deisa.execute_callbacks()
+
+    print("Time analytics:", time.time() - t0, flush=True)
+    print("Time compression:", compression_time, flush=True)
+    print("Time diagnostics:", diagnostics_time, flush=True)
+# Save plots
+plots = {
+    "all_callbacks": "mem_consumption_analytics.png",
+    "spilled_memory": "spilled_mem_analytics.png",
+}
+for name, filename in plots.items():
+    samplers[name].plot()
+    plt.savefig(filename)
+    plt.clf()
+
+# Save raw samples
+csv_files = {
+    "all_callbacks": "memory_samples.csv",
+    "spilled_memory": "memory_spilled_samples.csv",
+}
+for name, filename in csv_files.items():
+    df = pd.DataFrame(
+        samplers[name].samples[name],
+        columns=["time", "memory"],
+    )
+    df.to_csv(filename, index=False)
+
 
 def _sort_diagnostics_files():
     """Rewrite each diagnostics.csv sorted by iter (rows are appended in

@@ -152,6 +152,13 @@ data:
 
 plugins:
   mpi:
+  user_code:
+    on_event:
+      FluidMoments_MCP_event:
+        fluidmoments_mem_copy:
+      fdistribu_MCP_event:
+        fdistribu_mem_copy:
+
   pycall:
     on_event:
       Init:

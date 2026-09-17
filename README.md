@@ -61,6 +61,12 @@ cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=src/external/gyselalibxx/toolchains/<
 cmake --build build -j 4
 ```
 
+For enabling subfiling in the IO app, you should use the following CMake option:
+```bash
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=src/external/gyselalibxx/toolchains/<MACHINE>/toolchain.cmake -DSUBFILING=ON
+cmake --build build -j 4
+```
+
 For the docker toolchain, you should use the following in the docker container:
 ```bash
 cmake -S . -B build

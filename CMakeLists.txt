@@ -9,8 +9,6 @@ option(GYSELA_MINI_APP_USE_EXTERNAL_GYSELALIBXX "Use an external Gyselalib++ ins
 #                              Build libraries and executables
 ###############################################################################################
 
-set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
-
 ## Link to Gyselalibxx++ library
 if(GYSELA_MINI_APP_USE_EXTERNAL_GYSELALIBXX)
   find_package(gyselalibxx REQUIRED)

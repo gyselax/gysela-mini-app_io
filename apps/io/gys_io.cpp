@@ -239,7 +239,7 @@ void init_distribution_fun(DFieldSpGrid allfdistribu,
 
 void write_fdistribu(int rank, IdxRangeSpTor3DV2D const &local_mesh,
                      IdxRangeSpTor3DV2D const &global_mesh,
-                     host_t<DFieldMemSpGrid> const &allfdistribu_host) {
+                     DFieldMemSpGrid const &allfdistribu) {
   if (rank == 0) {
     cout << "Writing 5D distribution function and coordinates to file." << endl;
   }
@@ -273,8 +273,9 @@ void write_fdistribu(int rank, IdxRangeSpTor3DV2D const &local_mesh,
   expose_mesh_to_pdi("vpar", IdxRange<GridVpar>(global_mesh));
   expose_mesh_to_pdi("mu", IdxRange<GridMu>(global_mesh));
   // Expose distribution function to PDI and trigger write event
-  ddc::PdiEvent("write_fdistribu")
-      .with("local_fdistribu_sptor3Dv2D", allfdistribu_host);
+
+  ddc::PdiEvent("fdistribu_MCP_event")
+      .with("local_fdistribu_sptor3Dv2D_d", allfdistribu);
 
   if (rank == 0) {
     cout << "5D distribution function and coordinates written successfully."
@@ -414,7 +415,7 @@ void write_fluid_moments(int rank,
 void compute_fluid_moments_pycall(
     int rank, IdxRangeSpTor3DV2D const &local_mesh,
     IdxRangeSpTor3DV2D const &global_mesh,
-    host_t<DFieldMemSpGrid> const &allfdistribu_host) {
+    DFieldMemSpGrid const &allfdistribu) {
   if (rank == 0) {
     cout << "Computing Fluid Moments in Pycall event." << endl;
   }
@@ -448,7 +449,7 @@ void compute_fluid_moments_pycall(
   expose_mesh_to_pdi("vpar", IdxRange<GridVpar>(global_mesh));
   expose_mesh_to_pdi("mu", IdxRange<GridMu>(global_mesh));
   // Expose distribution function to PDI and trigger Pycall Fluid Moments event
-  ddc::PdiEvent("FluidMoments").with("local_fdistribu_sptor3Dv2D", allfdistribu_host);
+  ddc::PdiEvent("FluidMoments_MCP_event").with("local_fdistribu_sptor3Dv2D_d", allfdistribu);
 
   if (rank == 0) {
     cout << "Fluid Moments computed in Pycall event." << endl;
@@ -559,10 +560,6 @@ int main(int argc, char **argv) {
   time_points[1] = steady_clock::now();
   timing_names[0] = "initialisation";
 
-  // Create host version of distribution function for I/O (needed for PDI)
-  host_t<DFieldMemSpGrid> allfdistribu_host(local_mesh);
-  ddc::parallel_deepcopy(allfdistribu_host, allfdistribu);
-
   if (version == "mpi_transpose") {
     // ------------------------------------------------------------------------------
     // Execute the transpose: from Tor3DSplit to V2DSplit
@@ -583,9 +580,6 @@ int main(int argc, char **argv) {
     //-----------------------------------------------------------------------
     // Compute fluid moments in Python (density, mean velocity, temperature)
     //-----------------------------------------------------------------------
-    // Copy the initial distribution to the host (needed for PDI)
-    ddc::parallel_deepcopy(allfdistribu_host,
-                           allfdistribu); // alldistribu_host <--- allfdistribu
     for (int i = 0; i < n_iterations; i++) {
       if (rank == 0) {
         cout << "Iteration " << i << endl;
@@ -594,17 +588,14 @@ int main(int argc, char **argv) {
       // Compute fluid moments in Python (density, mean velocity, temperature)
       // in PDI
       compute_fluid_moments_pycall(rank, local_mesh, global_mesh,
-                                   allfdistribu_host);
-      // Update the distribution function
+                                   allfdistribu);
+
       if (rank == 0) {
         cout << "Updating distribution function" << endl;
       }
       if (i < n_iterations - 1) {
         update_distribution_fun(get_field(allfdistribu), local_mesh,
                                 configs.conf_gyselax, MPI_COMM_WORLD);
-        // Copy the updated distribution to the host
-        ddc::parallel_deepcopy(allfdistribu_host,
-                           allfdistribu); // alldistribu_host <--- allfdistribu
       }
     }
     // ------------------------------------------------------------------------------
@@ -627,7 +618,7 @@ int main(int argc, char **argv) {
   //---------------------------------------------------------
   // For I/O, we need global mesh for coordinate extents, but local mesh for
   // data
-  write_fdistribu(rank, local_mesh, global_mesh, allfdistribu_host);
+  write_fdistribu(rank, local_mesh, global_mesh, allfdistribu);
   write_fluid_moments(rank, local_mesh, global_mesh, fluid_moments);
   time_points[5] = steady_clock::now();
   timing_names[4] = "write";

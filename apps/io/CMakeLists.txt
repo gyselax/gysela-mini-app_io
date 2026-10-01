@@ -2,6 +2,7 @@
 
 add_executable(gys_io
     gys_io.cpp
+    user_code.cpp
 )
 
 target_link_libraries(gys_io

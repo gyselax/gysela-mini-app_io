@@ -1,6 +1,6 @@
 import argparse
 import xarray as xr
-from fluid_moments import FluidMoments
+from processing.fluid_moments import FluidMoments
 
 # -------------------------------------------------
 # 3. Execution Script (Dask-Backed)

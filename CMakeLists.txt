@@ -18,11 +18,11 @@ else()
   set(GYSELALIBXX_BUILD_TESTING OFF)
   set(GYSELALIBXX_BUILD_SIMULATIONS OFF)
   set(GYSELALIBXX_BUILD_DOCUMENTATION OFF)
-  add_subdirectory(src/external/gyselalibxx)
+  add_subdirectory(gyselalibxx)
 endif()
 
-## Build the C++ source library in `src/C++/`
-add_subdirectory(src/C++)
+## Build the C++ source library in `src/`
+add_subdirectory(src)
 
 ## Build the simulations (applications mains) in `apps/`
 add_subdirectory(apps/)

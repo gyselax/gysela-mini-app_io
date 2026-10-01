@@ -2,10 +2,10 @@
 
 import argparse
 
-from utils.read_timing_stats import setup_parser as setup_read_timing_parser
-from utils.read_timing_stats import main as read_timing_main
-from utils.verify_fluid_moments import setup_parser as setup_verify_moments_parser
-from utils.verify_fluid_moments import main as verify_moments_main
+from processing.utils.read_timing_stats import setup_parser as setup_read_timing_parser
+from processing.utils.read_timing_stats import main as read_timing_main
+from processing.utils.verify_fluid_moments import setup_parser as setup_verify_moments_parser
+from processing.utils.verify_fluid_moments import main as verify_moments_main
 
 
 def main():

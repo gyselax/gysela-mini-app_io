@@ -37,11 +37,11 @@ dask_worker_pid=$!
 sleep 10
 
 echo "Launch analytics"
-python3 src/python/$ANALYTICS_FILE &
+python3 processing/$ANALYTICS_FILE &
 analytics_pid=$!
 
 echo "Launch simu"
-mpirun -n $SIMU_NODES $BASE_DIR/build/apps/io/gys_io $SCRIPT_DIR/gys_io.yaml $SCRIPT_DIR/$PDI_CONFIG & 
+mpirun -n $SIMU_NODES $BASE_DIR/build/apps/io/gys_io $SCRIPT_DIR/params/gys_io.yaml $SCRIPT_DIR/params/$PDI_CONFIG & 
 simu_pid=$!
 
 wait ${analytics_pid}

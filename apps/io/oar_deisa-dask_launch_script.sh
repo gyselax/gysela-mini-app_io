@@ -47,7 +47,7 @@ done
 sleep 10
 
 echo "Launch analytics"
-python3 src/python/analytics.py &
+python3 processing/analytics.py &
 analytics_pid=$!
 
 echo "Launch simulation"
@@ -55,7 +55,7 @@ mpirun -machinefile $MPI_NODEFILE \
 	--prefix $(dirname $(dirname $(which mpirun))) \
 	-x PYTHONPATH \
 	-x DEISA_DASK_SCHEDULER_ADDRESS \
-	-n $SIMU_NODES build/apps/io/gys_io apps/io/gys_io.yaml apps/io/pdi_deisa.yaml &
+	-n $SIMU_NODES build/apps/io/gys_io apps/io/params/gys_io.yaml apps/io/params/pdi_deisa.yaml &
 simu_pid=$!
 
 wait ${analytics_pid}

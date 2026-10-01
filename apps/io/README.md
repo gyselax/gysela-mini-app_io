@@ -33,15 +33,15 @@ If you run on persee, the environment is already available. You have nothing to 
 
 - `nsimu_procs`: number of MPI ranks for the simulation
 - `nworker_proc`: number of Dask workers to use for the analytics
-- `pdi_config.yml`: PDI configuration file (default: uses `pdi_deisa.yaml`)
-- `analytics_script.py`: the analytics script to launch (either `analytics.py` if you chose `pdi_deisa.yaml`, or `optimised_analytics.py` if you chose `optimised_pdi_deisa.yaml`)
+- `pdi_config.yml`: PDI configuration file (default: uses `pdi_deisa.yaml`, in `apps/io/params/`)
+- `analytics_script.py`: the analytics script to launch from `processing/` (either `analytics.py` if you chose `pdi_deisa.yaml`, or `optimised_analytics.py` if you chose `optimised_pdi_deisa.yaml`)
 
 
 ### Sequential Run
 
 ```bash
 source toolcahins/<machine>/[prepare.sh | environment.sh]
-mpirun -n <nprocs> ./build/apps/io/gys_io [config.yaml] seq_pdi.yaml
+mpirun -n <nprocs> ./build/apps/io/gys_io apps/io/params/gys_io.yaml apps/io/params/seq_pdi.yaml
 ```
 
 ### Run with OAR
@@ -54,7 +54,7 @@ mpirun -n <nprocs> ./build/apps/io/gys_io [config.yaml] seq_pdi.yaml
 
 ## Configuration
 
-Edit `gys_io.yaml` to configure:
+Edit `apps/io/params/gys_io.yaml` to configure:
 
 - **Mesh**: Grid sizes and ranges for toroidal coordinates (Tor1, Tor2, Tor3) and velocity space (Vpar, Mu)
 - **Species**: Number of species, charges, masses

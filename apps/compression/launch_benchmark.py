@@ -23,7 +23,7 @@ GYS_COMPRESS_BIN = "./build/apps/compression/gys_compress"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
 
-SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_two_stream.yaml")
+SOURCE_GYSELA_YAML = os.path.join(SCRIPT_DIR, "params_landau_damping.yaml")
 SOURCE_PDI_YAML = os.path.join(SCRIPT_DIR, "pdi_out_diags.yaml")
 ANALYTICS_SCRIPT = os.path.join(BASE_DIR, "src", "python", "diagnostics.py")
 COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT), "compression_diagnostics.py")
@@ -37,78 +37,124 @@ COMPRESSION_DIAGNOSTICS_SCRIPT = os.path.join(os.path.dirname(ANALYTICS_SCRIPT),
 ENV_SCRIPT = None  # resolved from --arch
 VENV_ACTIVATE = None  # resolved from --venv
 
-# 3 distinct nodes on Adastra: one for the Dask scheduler, the Dask
-# worker(s), and the simulation.
-ADASTRA_NODES = 3
+# Node topology on Adastra:
+#   - 1 node for the Dask scheduler
+#   - 2 dedicated nodes for the Dask workers
+#   - SIM_NODES nodes for the simulation
+# Total allocation: 3 + SIM_NODES nodes.
+DEFAULT_SIM_NODES = 1
+SIM_NODES = None  # resolved from --sim-nodes, see configure_toolchain()
 DEFAULT_N_PROCS = 4
-ADASTRA_N_PROCS = None  # simulation MPI ranks -- resolved from --nprocs, see configure_toolchain()
+ADASTRA_N_PROCS = None  # simulation MPI ranks (total) -- resolved from --nprocs, see configure_toolchain()
 
 GENOA_LOGICAL_THREADS_PER_NODE = 384
 DEFAULT_SIM_OMP_NUM_THREADS = 1
 
 SIM_OMP_THREADS = None  # resolved from --arch, see configure_toolchain()
+RESOLVED_ARCH = None  # lowercased --arch, see configure_toolchain()
 
 # Dask worker processes on its dedicated node: 1 per CPU socket
 WORKER_RANKS_PER_NODE_BY_ARCH = {"genoa": 2, "mi250": 1}
 DEFAULT_WORKER_RANKS_PER_NODE = 2
 
+SITE_BY_ARCH = {
+    "genoa": "adastra",
+    "mi250": "adastra",
+    "xeon": "persee",
+    "v100": "persee",
+}
 
-def resolve_site():
-    """Which toolchains/<site>/ subtree we're on.
-    Confirm via Slurm's ClusterName (`scontrol show config`).
+
+def _splittable_2d(a_ext, b_ext, nprocs):
+    """True if some factorization p1*p2 == nprocs divides (a_ext, b_ext) per-dim."""
+    for p1 in range(1, nprocs + 1):
+        if nprocs % p1 == 0:
+            p2 = nprocs // p1
+            if a_ext % p1 == 0 and b_ext % p2 == 0:
+                return True
+    return False
+
+
+def assert_mesh_divisible(config, nprocs):
+    """Fail fast if gys_compress's domain decomposition cannot split the mesh.
     """
-    scontrol = shutil.which("scontrol")
-    if scontrol:
-        try:
-            result = subprocess.run(
-                [scontrol, "show", "config"], capture_output=True, text=True, timeout=15
+    mesh = config["SplineMesh"]
+    x_ext = int(mesh["x_ncells"])
+    y_ext = int(mesh["y_ncells"])
+    vx_ext = int(mesh["vx_ncells"]) + 1
+    vy_ext = int(mesh["vy_ncells"]) + 1
+
+    for name, a, b in (("(x, y)", x_ext, y_ext), ("(vx, vy)", vx_ext, vy_ext)):
+        if (a * b) % nprocs != 0 or not _splittable_2d(a, b, nprocs):
+            raise RuntimeError(
+                f"gys_compress cannot split the {name} extents ({a}, {b}) "
+                f"over {nprocs} MPI ranks (x/y extents = ncells, vx/vy "
+                f"extents = ncells + 1; their product must be divisible by "
+                f"--nprocs and each dimension by a factor of it). Adjust "
+                f"--nprocs or the SplineMesh ncells."
             )
-            if result.returncode == 0 and "adastra" in result.stdout.lower():
-                return "adastra"
-        except (OSError, subprocess.TimeoutExpired):
-            pass
 
-    if "adastra" in socket.gethostname().lower():
-        return "adastra"
 
-    return "persee"
+def sim_ranks_per_node():
+    """MPI ranks per simulation node: --nprocs spread across --sim-nodes (ceil)."""
+    return -(-ADASTRA_N_PROCS // SIM_NODES)
+
+
+def resolve_site(arch):
+    """Which toolchains/<site>/ subtree to use, determined by --arch."""
+    try:
+        return SITE_BY_ARCH[arch.lower()]
+    except KeyError:
+        raise RuntimeError(
+            f"Unknown --arch '{arch}'. Known archs: {', '.join(sorted(SITE_BY_ARCH))}."
+        ) from None
+
+
 
 
 def configure_toolchain(args):
     """Resolve the toolchains/<site>/<arch>/environment.sh, venv activate path,
-    the simulation's MPI rank count, and its OMP_NUM_THREADS, from --arch/--venv/--nprocs."""
-    global ENV_SCRIPT, VENV_ACTIVATE, SIM_OMP_THREADS, ADASTRA_N_PROCS
-    ENV_SCRIPT = os.path.join(BASE_DIR, "toolchains", resolve_site(), args.arch.lower(), "environment.sh")
+    the simulation's node/rank counts, and its OMP_NUM_THREADS,
+    from --arch/--venv/--sim-nodes/--nprocs."""
+    global ENV_SCRIPT, VENV_ACTIVATE, SIM_OMP_THREADS, ADASTRA_N_PROCS, SIM_NODES, RESOLVED_ARCH
+    ENV_SCRIPT = os.path.join(BASE_DIR, "toolchains", resolve_site(args.arch), args.arch.lower(), "environment.sh")
     venv_dir = os.path.abspath(args.venv) if args.venv else os.path.join(BASE_DIR, ".gys_env")
     VENV_ACTIVATE = os.path.join(venv_dir, "bin", "activate")
 
+    SIM_NODES = args.sim_nodes
     ADASTRA_N_PROCS = args.nprocs
+    RESOLVED_ARCH = args.arch.lower()
 
-    arch_lower = args.arch.lower()
+    arch_lower = RESOLVED_ARCH
     if arch_lower == "genoa":
-        SIM_OMP_THREADS = max(1, GENOA_LOGICAL_THREADS_PER_NODE // ADASTRA_N_PROCS)
+        SIM_OMP_THREADS = max(1, GENOA_LOGICAL_THREADS_PER_NODE // sim_ranks_per_node())
     elif arch_lower == "mi250":
         SIM_OMP_THREADS = 1
     else:
         SIM_OMP_THREADS = DEFAULT_SIM_OMP_NUM_THREADS
 
 
-def on_adastra():
+def on_adastra(arch):
     """sbatch on PATH and not already inside a job => submit ourselves as a batch job."""
-    return resolve_site() == "adastra" and "SLURM_JOB_ID" not in os.environ
+    return resolve_site(arch) == "adastra" and "SLURM_JOB_ID" not in os.environ
 
 
 def effective_n_workers(args):
     """Dask worker process count: explicit --dask-workers, else 1 rank/socket by --arch on Adastra, else 1."""
     if args.dask_workers is not None:
         return args.dask_workers
-    if resolve_site() == "adastra":
+    if resolve_site(args.arch) == "adastra":
         return WORKER_RANKS_PER_NODE_BY_ARCH.get(args.arch.lower(), DEFAULT_WORKER_RANKS_PER_NODE)
     return 1
 
 
 def resolve_role_nodes():
-    """(scheduler_node, worker_node, sim_node) from the current Slurm allocation, or all-None outside one."""
+    """(scheduler_node, worker_nodes, sim_nodes) from the current Slurm allocation.
+
+    Node 0 hosts the scheduler; the next 2 nodes host the Dask
+    worker(s); the last SIM_NODES nodes host the simulation. Returns
+    (None, None, None) outside an allocation.
+    """
     nodelist = os.environ.get("SLURM_JOB_NODELIST")
     if not nodelist:
         return None, None, None
@@ -117,12 +163,19 @@ def resolve_role_nodes():
         ["scontrol", "show", "hostnames", nodelist], capture_output=True, text=True, check=True
     )
     nodes = [h for h in result.stdout.split() if h]
-    if len(nodes) < 3:
+    needed = 3 + SIM_NODES
+    if len(nodes) < needed:
         raise RuntimeError(
-            f"Need 3 distinct nodes (scheduler, worker, simulation); "
-            f"allocation only has {len(nodes)}. Check ADASTRA_NODES / #SBATCH --nodes."
+            f"Need {needed} distinct nodes "
+            f"(1 scheduler + 2 workers + {SIM_NODES} simulation); "
+            f"allocation only has {len(nodes)}."
         )
-    return nodes[0], nodes[1], nodes[2]
+
+    scheduler_node = nodes[0]
+    worker_nodes = nodes[1:3]
+    sim_nodes = nodes[3:3 + SIM_NODES]
+
+    return scheduler_node, worker_nodes, sim_nodes
 
 
 def parse_args():
@@ -172,13 +225,27 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--sim-nodes",
+        type=int,
+        default=DEFAULT_SIM_NODES,
+        help=(
+            "Number of Slurm nodes for the simulation "
+            f"(default: {DEFAULT_SIM_NODES}). "
+            "The Dask infrastructure always reserves 1 scheduler node and "
+            "2 dedicated worker nodes, so the total allocation is "
+            "3 + sim-nodes."
+        ),
+    )
+
+    parser.add_argument(
         "--nprocs",
         type=int,
         default=DEFAULT_N_PROCS,
         help=(
-            "Number of MPI ranks to launch the simulation with "
-            f"(default: {DEFAULT_N_PROCS}). On Adastra (GENOA), also sets "
-            "OMP_NUM_THREADS per rank to threads_per_node/nprocs."
+            "Total number of MPI ranks to launch the simulation with "
+            f"(default: {DEFAULT_N_PROCS}), spread evenly across "
+            "--sim-nodes. On Adastra (GENOA), also sets OMP_NUM_THREADS "
+            "per rank to threads_per_node / ranks_per_node."
         ),
     )
 
@@ -206,13 +273,13 @@ def parse_args():
 
     parser.add_argument(
         "--arch",
-        default="GENOA" if resolve_site() == "adastra" else "xeon",
+        default="GENOA",
         help=(
             "Node arch/toolchain to activate: toolchains/<site>/<arch>/"
-            "environment.sh, where <site> is 'adastra' or 'persee' depending on "
-            "the current machine. On Adastra, also used for 'srun/#SBATCH "
-            "--constraint=' and to pick the Dask worker's rank count. "
-            "Default: GENOA on Adastra, xeon on persee."
+            "environment.sh. The site ('adastra' or 'persee') is derived from "
+            f"the arch ({SITE_BY_ARCH}). On Adastra, also used for "
+            "'#SBATCH --constraint=' and to pick the Dask worker's rank count. "
+            "Default: GENOA."
         ),
     )
 
@@ -395,15 +462,19 @@ def load_deisa_env():
     return json.loads(result.stdout)
 
 
-def _node_launch_prefix(node):
-    """srun prefix to run a single process on a specific node, or [] to just run locally."""
-    if node is None:
+def _nodes_launch_prefix(nodes):
+    """srun prefix to run one task per given node, or [] to just run locally."""
+    if not nodes:
         return []
-    return ["srun", "-w", node, "-N", "1", "--ntasks-per-node", "1", "--overlap"]
+    node_list = [nodes] if isinstance(nodes, str) else list(nodes)
+    return [
+        "srun", "-w", ",".join(node_list), "-N", str(len(node_list)),
+        "--ntasks-per-node", "1", "--overlap",
+    ]
 
 
 def start_dask(deisa_env, work_dir, n_workers=1):
-    """Start the Dask scheduler and worker(s), each on their own dedicated node on
+    """Start the Dask scheduler and worker(s), each on their own dedicated node(s) on
     Adastra (else locally). Returns (sch_proc, worker_proc, updated_env).
 
     The scheduler file lives inside work_dir (rather than a fixed repo-wide
@@ -415,10 +486,10 @@ def start_dask(deisa_env, work_dir, n_workers=1):
     if os.path.exists(schefile):
         os.remove(schefile)
 
-    scheduler_node, worker_node, _ = resolve_role_nodes()
+    scheduler_node, worker_nodes, _ = resolve_role_nodes()
 
     sch_proc = subprocess.Popen(
-        _node_launch_prefix(scheduler_node) + [
+        _nodes_launch_prefix(scheduler_node) + [
             "dask-scheduler",
             f"--scheduler-file={schefile}",
             "--port", "0",
@@ -443,8 +514,10 @@ def start_dask(deisa_env, work_dir, n_workers=1):
     deisa_env = dict(deisa_env)
     deisa_env["DEISA_DASK_SCHEDULER_ADDRESS"] = scheduler_address
 
+    # One dask-worker task per worker node (srun fans this out), each
+    # spawning n_workers worker processes on its node.
     worker_proc = subprocess.Popen(
-        _node_launch_prefix(worker_node) + [
+        _nodes_launch_prefix(worker_nodes) + [
             "dask-worker",
             f"--nworkers={n_workers}",
             "--local-directory=/tmp",
@@ -453,7 +526,8 @@ def start_dask(deisa_env, work_dir, n_workers=1):
         env=deisa_env,
     )
 
-    print(f"  Waiting 10 s for {n_workers} worker(s) to connect...")
+    n_worker_nodes = len(worker_nodes) if worker_nodes else 1
+    print(f"  Waiting 10 s for {n_workers * n_worker_nodes} worker(s) to connect...")
     time.sleep(10)
 
     return sch_proc, worker_proc, deisa_env
@@ -483,18 +557,25 @@ def print_branch_banner(branch_name):
 
 
 def sim_launch_prefix():
-    """argv prefix to launch gys_compress: srun on the dedicated sim node inside our Adastra job, else mpirun."""
+    """argv prefix to launch gys_compress: srun on the dedicated sim node(s) inside our Adastra job, else mpirun."""
     if "SLURM_JOB_ID" in os.environ:
-        _, _, sim_node = resolve_role_nodes()
+        _, _, sim_nodes = resolve_role_nodes()
         prefix = ["srun"]
-        if sim_node:
-            prefix += ["-w", sim_node]
-        prefix += [
-            "-N", "1", "--ntasks-per-node", str(ADASTRA_N_PROCS),
-            "--cpus-per-task", str(SIM_OMP_THREADS),
-        ]
-        if SIM_OMP_THREADS > 1:
-            prefix += ["--threads-per-core", "2"]
+        if sim_nodes:
+            prefix += ["-w", ",".join(sim_nodes), "-N", str(len(sim_nodes))]
+        else:
+            prefix += ["-N", str(SIM_NODES)]
+        prefix += ["--ntasks-per-node", str(sim_ranks_per_node())]
+        if RESOLVED_ARCH == "mi250":
+            # Per subgys.py's working adastra_mi250 config: explicit CPU
+            # binding conflicts with the GPU nodes' topology and breaks
+            # Cray MPICH's XPMEM/CMA intra-node transport (process_vm_readv
+            # "Bad address" inside cray_common_memops.c during Alltoall).
+            prefix += ["--cpu-bind=none", "--mem-bind=none"]
+        else:
+            prefix += ["--cpus-per-task", str(SIM_OMP_THREADS)]
+            if SIM_OMP_THREADS > 1:
+                prefix += ["--threads-per-core", "2"]
         prefix += ["--overlap"]
         return prefix
     return ["mpirun", "-n", str(ADASTRA_N_PROCS)]
@@ -526,8 +607,11 @@ def run_sim_with_diagnostics(branch_name, gysela_yaml, pdi_yaml, work_dir, n_wor
         if "SLURM_JOB_ID" in os.environ:
             sim_env = dict(deisa_env)
             sim_env["OMP_NUM_THREADS"] = str(SIM_OMP_THREADS)
-            sim_env["OMP_PROC_BIND"] = "CLOSE"
-            sim_env["OMP_PLACES"] = "THREADS"
+            if RESOLVED_ARCH == "mi250":
+                sim_env["MPICH_GPU_SUPPORT_ENABLED"] = "1"
+            else:
+                sim_env["OMP_PROC_BIND"] = "CLOSE"
+                sim_env["OMP_PLACES"] = "THREADS"
 
         analytics_proc = subprocess.Popen(
             ["python3", ANALYTICS_SCRIPT],
@@ -755,24 +839,30 @@ def submit_batch_and_wait(args):
     forwarded += ["--diag-mode", str(args.diag_mode)]
     if args.dask_workers is not None:
         forwarded += ["--dask-workers", str(args.dask_workers)]
+    forwarded += ["--sim-nodes", str(args.sim_nodes)]
     forwarded += ["--nprocs", str(args.nprocs)]
     forwarded += ["--arch", args.arch]
     if args.venv:
         forwarded += ["--venv", args.venv]
 
     n_workers = effective_n_workers(args)
-    max_ranks_per_node = max(ADASTRA_N_PROCS, n_workers, 1)
+    total_nodes = 3 + SIM_NODES
+    max_ranks_per_node = max(sim_ranks_per_node(), n_workers, 1)
 
     sbatch_lines = [
         "#!/bin/bash",
         "#SBATCH --job-name=gys-compression-benchmark",
-        f"#SBATCH --nodes={ADASTRA_NODES}",
+        f"#SBATCH --nodes={total_nodes}",
         f"#SBATCH --ntasks-per-node={max_ranks_per_node}",
         f"#SBATCH --time={args.time}",
         f"#SBATCH --constraint={args.arch}",
         f"#SBATCH --output={log_path}",
         f"#SBATCH --error={log_path}",
     ]
+    if args.arch.lower() == "mi250":
+        # Per subgys.py's working adastra_mi250 config -- request all
+        # memory on the node rather than a per-task share.
+        sbatch_lines.append("#SBATCH --mem=0")
     if account:
         sbatch_lines.append(f"#SBATCH --account={account}")
     sbatch_lines += ["", " ".join(f'"{a}"' for a in forwarded)]
@@ -875,7 +965,10 @@ def main():
     args = parse_args()
     configure_toolchain(args)
 
-    if on_adastra():
+    with open(SOURCE_GYSELA_YAML, "r") as f:
+        assert_mesh_divisible(yaml.safe_load(f), args.nprocs)
+
+    if on_adastra(args.arch):
         submit_batch_and_wait(args)
         return
 

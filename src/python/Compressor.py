@@ -39,7 +39,7 @@ class Compressor:
 
     method_name = "placeholder"
     payload_extension = ".bin"
-    accepts_dask = False # subclasses set this when they handle dask arrays natively
+    accepts_dask = False  # subclasses set this when they handle dask arrays natively
 
     def __init__(self, method_name: Optional[str] = None, **params: Any) -> None:
         self.method_name = method_name or self.method_name or self.__class__.__name__
@@ -188,6 +188,7 @@ class Compressor:
         diff = f_original - f_reconstructed
         original_norm = np.linalg.norm(f_original.ravel())
         diff_norm = np.linalg.norm(diff.ravel())
+
         return {
             "relative_l2_error": float(diff_norm / original_norm) if original_norm > 0.0 else np.nan,
             "max_abs_error": float(np.max(np.abs(diff))) if diff.size else np.nan,

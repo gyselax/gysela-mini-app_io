@@ -15,16 +15,16 @@ OFFLINE_COMPRESSOR_PARAMS = {
     "normalisation": "none",
     "clip_nonnegative": False,
     # rows per fit batch, i.e. per dask block (None = one batch per species)
-    "batch_size": 4096
+    "batch_size": 4096,
 }
 
 
-#OFFLINE_COMPRESSOR_CLASS = PCACompressor
-#OFFLINE_COMPRESSOR_PARAMS = {
-#    "n_components": 2,
-#    "normalisation": "none",
-#    "clip_nonnegative": False,
-#}
+# OFFLINE_COMPRESSOR_CLASS = PCACompressor
+# OFFLINE_COMPRESSOR_PARAMS = {
+#     "n_components": 2,
+#     "normalisation": "none",
+#     "clip_nonnegative": False,
+# }
 
 
 # OFFLINE_COMPRESSOR_CLASS = NeuralNetworkCompressor

@@ -188,7 +188,7 @@ plugins:
             elif int(compression_mode) == 2:
               tsend = time.time()
               bridge.send("fdistribu_offline", fdistribu, timestep)
-              print(f"Time send fdistribu: {time.time() - tsend} --", flush=True)
+              #print(f"Time send fdistribu: {time.time() - tsend} --", flush=True)
 
           if timestep % int(nbstep_diag) == 0:
             if diag_mode == 1:

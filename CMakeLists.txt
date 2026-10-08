@@ -1,56 +1,31 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.25)
-project(gysela-mini-app_io C CXX)
+project(gysela-mini-app_io CXX)
 
-## Use CTest for running tests
-include(CTest)
-
-find_package(GTest "1.12" QUIET)
-
-## Look for a pre-installed paraconf
-find_package(paraconf REQUIRED COMPONENTS C)
-
-set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
-add_link_options(-no-pie)
-
-###############################################################################################
-#                           List of options for Gyselalib++ library
-###############################################################################################
-set(GYSELALIBXX_BUILD_TESTING OFF)
-set(GYSELALIBXX_BUILD_SIMULATIONS OFF)
-set(GYSELALIBXX_BUILD_DOCUMENTATION OFF)
-set(GYSELALIBXX_INCLUDE_TESTING_DEPENDENCIES ON)
-
-
-###############################################################################################
-#                                   List of options
-###############################################################################################
-option(GYSELA_MINI_APP_COMPILE_SOURCE "Enable compilation of the source code (this should be set to off to build documentation without the C++ dependencies)" ON)
-option(GYSELA_MINI_APP_BUILD_DOCUMENTATION "Build the documentation." OFF)
-option(GYSELA_MINI_APP_BUILD_SIMULATIONS "Build the simulations." ON)
-
+option(GYSELA_MINI_APP_USE_EXTERNAL_GYSELALIBXX "Use an external Gyselalib++ installation" OFF)
 
 ###############################################################################################
 #                              Build libraries and executables
 ###############################################################################################
 
-if ("${GYSELA_MINI_APP_COMPILE_SOURCE}")
-
-set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
+find_package(DDC REQUIRED COMPONENTS pdi)
+find_package(MPI REQUIRED COMPONENTS CXX)
+find_package(paraconf REQUIRED COMPONENTS C)
+find_package(PDI REQUIRED COMPONENTS C)
 
 ## Link to Gyselalibxx++ library
-add_subdirectory(src/external/gyselalibxx)
-
-## Change the C++ flags to the Gyselalibxx++ specific ones
-set(CMAKE_CXX_FLAGS "${GYSELALIBXX_DEFAULT_CXX_FLAGS} ${CMAKE_CXX_FLAGS}")
+if(GYSELA_MINI_APP_USE_EXTERNAL_GYSELALIBXX)
+  find_package(gyselalibxx REQUIRED)
+else()
+  set(GYSELALIBXX_BUILD_TESTING OFF)
+  set(GYSELALIBXX_BUILD_SIMULATIONS OFF)
+  set(GYSELALIBXX_BUILD_DOCUMENTATION OFF)
+  add_subdirectory(src/external/gyselalibxx)
+endif()
 
 ## Build the C++ source library in `src/C++/`
 add_subdirectory(src/C++)
 
 ## Build the simulations (applications mains) in `apps/`
-if("${GYSELA_MINI_APP_BUILD_SIMULATIONS}")
-    add_subdirectory(apps/)
-endif()
-
-endif() # GYSELA_MINI_APP_COMPILE_SOURCE
+add_subdirectory(apps/)

@@ -12,9 +12,9 @@ target_include_directories(mini_app_io_lib PUBLIC
 )
 
 target_link_libraries(mini_app_io_lib PUBLIC
-    gslx::quadrature
-    gslx::utils
-    gslx::speciesinfo
-    gslx::io
-    gslx::mpi_parallelisation
+    gyselalibxx::quadrature
+    gyselalibxx::utils
+    gyselalibxx::speciesinfo
+    gyselalibxx::io
+    gyselalibxx::mpi_parallelisation
 )

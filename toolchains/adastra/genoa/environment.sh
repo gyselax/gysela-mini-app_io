@@ -11,7 +11,7 @@ module purge
 
 SPACK_USER_VERSION="spack-user-5.0.0"
 
-export SPACK_USER_PREFIX="/lus/work/CT5/gen2224/SHARED/gysela-mini-app-GENOA"
+export SPACK_USER_PREFIX="/lus/work/CT5/gen2224/SHARED/gysela-mini-app-compression-GENOA"
 export SPACK_USER_CACHE_PATH="${SPACK_USER_PREFIX}/cache"
 
 # Avoid too many temporary files in the Spack installation tree

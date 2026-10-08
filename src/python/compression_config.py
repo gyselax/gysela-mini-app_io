@@ -2,18 +2,29 @@
 
 import inspect
 from compression_methods.PCA import PCACompressor
+from compression_methods.incremental_pca import IncrementalPCACompressor
 from compression_methods.random_noise import RandomNoiseCompressor
 from compression_methods.neural_network import NeuralNetworkCompressor, OnlineNeuralNetworkCompressor
 
 
 
 
-OFFLINE_COMPRESSOR_CLASS = PCACompressor
+OFFLINE_COMPRESSOR_CLASS = IncrementalPCACompressor
 OFFLINE_COMPRESSOR_PARAMS = {
-    "n_components": 2,
+    "n_components": 8,
     "normalisation": "none",
     "clip_nonnegative": False,
+    # rows per fit batch, i.e. per dask block (None = one batch per species)
+    "batch_size": 4096,
 }
+
+
+# OFFLINE_COMPRESSOR_CLASS = PCACompressor
+# OFFLINE_COMPRESSOR_PARAMS = {
+#     "n_components": 2,
+#     "normalisation": "none",
+#     "clip_nonnegative": False,
+# }
 
 
 # OFFLINE_COMPRESSOR_CLASS = NeuralNetworkCompressor

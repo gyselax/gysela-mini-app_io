@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 
-add_executable(gys_io
-    ${PROJECT_SOURCE_DIR}/src/io/gys_io.cpp
+add_executable(gys_checkpointing
+    ${PROJECT_SOURCE_DIR}/src/checkpointing/gys_checkpointing.cpp
 )
 
-target_link_libraries(gys_io
+target_link_libraries(gys_checkpointing
     PUBLIC
         mini_app_io_lib
         DDC::core
@@ -14,4 +14,4 @@ target_link_libraries(gys_io
         MPI::MPI_CXX
 )
 
-install(TARGETS gys_io)
+install(TARGETS gys_checkpointing)

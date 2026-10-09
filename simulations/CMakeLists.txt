@@ -1,5 +1,5 @@
-option(BUILD_IO_APP "Build the IO mini app" ON)
+option(BUILD_CHECKPOINT_APP "Build the Checkpointing mini app" ON)
 
-if(BUILD_IO_APP)
-    add_subdirectory(io)
+if(BUILD_CHECKPOINT_APP)
+    add_subdirectory(checkpointing)
 endif()

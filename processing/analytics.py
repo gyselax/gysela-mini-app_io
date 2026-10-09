@@ -9,7 +9,7 @@ import logging
 import xarray as xr
 import dask.array as da
 from pathlib import Path
-from fluid_moments import FluidMoments
+from processing.fluid_moments import FluidMoments
 from deisa.dask import Deisa
 from distributed import Variable, Queue, get_client
 

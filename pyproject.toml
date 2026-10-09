@@ -34,14 +34,14 @@ dev = ["pytest>=8.0"]
 cuda12 = ["jax[cuda12]"]
 
 [tool.pytest.ini_options]
-testpaths = ["src/tests"]
-pythonpath = ["src/python"]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [project.scripts]
-gysela-mini-app = "utils.cli:main"
+gysela-mini-app = "processing.utils.cli:main"
 
 [tool.setuptools]
-package-dir = {"" = "src/python"}
+package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
-where = ["src/python"]
+where = ["."]

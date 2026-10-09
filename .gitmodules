@@ -1,3 +1,3 @@
 [submodule "gyselalibxx"]
-	path = src/external/gyselalibxx
+	path = gyselalibxx
 	url = git@github.com:gyselax/gyselalibxx.git

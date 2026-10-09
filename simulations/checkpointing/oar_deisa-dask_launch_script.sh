@@ -37,7 +37,7 @@ export DEISA_DASK_SCHEDULER_ADDRESS=$(jq -r '.["address"]' $SCHEFILE)
 echo "Launch workers"
 dask_worker_pids=()
 for NODE in "${WORKER_NODES[@]}"; do
-    oarsh ${NODE} ". $BASE_DIR/apps/io/env-miniapp-io.sh && dask worker \
+    oarsh ${NODE} ". $BASE_DIR/simulations/io/env-miniapp-io.sh && dask worker \
         --nworkers 1 \
         --nthreads ${DASK_THREADS_PER_WORKER} \
         --local-directory /tmp \
@@ -47,7 +47,7 @@ done
 sleep 10
 
 echo "Launch analytics"
-python3 src/python/analytics.py &
+python3 processing/analytics.py &
 analytics_pid=$!
 
 echo "Launch simulation"
@@ -55,7 +55,7 @@ mpirun -machinefile $MPI_NODEFILE \
 	--prefix $(dirname $(dirname $(which mpirun))) \
 	-x PYTHONPATH \
 	-x DEISA_DASK_SCHEDULER_ADDRESS \
-	-n $SIMU_NODES build/apps/io/gys_io apps/io/gys_io.yaml apps/io/pdi_deisa.yaml &
+	-n $SIMU_NODES build/simulations/io/gys_io simulations/io/params/gys_io.yaml simulations/io/params/pdi_deisa.yaml &
 simu_pid=$!
 
 wait ${analytics_pid}

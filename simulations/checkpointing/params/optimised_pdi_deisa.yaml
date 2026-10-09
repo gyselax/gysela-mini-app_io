@@ -157,29 +157,89 @@ plugins:
       Init:
         with: {}
         exec: |
+          import json
+          import time
           import xarray as xr
           import numpy as np
-          from fluid_moments import FluidMoments
-      FluidMoments:
-        with: {local_fdistribu_raw: $local_fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
+          import logging
+          from mpi4py import MPI
+          from processing.fluid_moments import FluidMoments
+          from deisa.dask import Bridge 
+
+          #logging.basicConfig(level=logging.DEBUG)
+
+          comm = MPI.COMM_WORLD
+      InitBridge:
+        with: { density_extents: $density_extents, 
+                mean_velocity_extents: $mean_velocity_extents,
+                temperature_extents: $temperature_extents,
+                local_density_extents: $local_density_extents, 
+                local_mean_velocity_extents: $local_mean_velocity_extents,
+                local_temperature_extents: $local_temperature_extents,
+                local_density_starts: $local_density_starts, 
+                local_mean_velocity_starts: $local_mean_velocity_starts,
+                local_temperature_starts: $local_temperature_starts
+
+              }
         exec: |
-          fdistribu = xr.DataArray(
+          arrays_metadata = { 
+                              'partial_density': {
+                                      'global_shape': ( int(density_extents[0]),
+                                                        int(density_extents[1]),
+                                                        int(density_extents[2]),
+                                                        int(density_extents[3])),
+                                      'chunk_shape':  ( int(local_density_extents[0]),
+                                                        int(local_density_extents[1]),
+                                                        int(local_density_extents[2]),
+                                                        int(local_density_extents[3])),
+                                      'chunk_position': tuple((local_density_starts // local_density_extents).astype(int).tolist()),
+                              },
+                              'partial_velocity': {
+                                      'global_shape': ( int(mean_velocity_extents[0]),
+                                                        int(mean_velocity_extents[1]),
+                                                        int(mean_velocity_extents[2]),
+                                                        int(mean_velocity_extents[3])),
+                                      'chunk_shape':  ( int(local_mean_velocity_extents[0]),
+                                                        int(local_mean_velocity_extents[1]),
+                                                        int(local_mean_velocity_extents[2]),
+                                                        int(local_mean_velocity_extents[3])),
+                                      'chunk_position': tuple((local_mean_velocity_starts // local_mean_velocity_extents).astype(int).tolist()),
+                              },
+                              'partial_temperature': {
+                                      'global_shape': ( int(temperature_extents[0]),
+                                                        int(temperature_extents[1]),
+                                                        int(temperature_extents[2]),
+                                                        int(temperature_extents[3])),
+                                      'chunk_shape':  ( int(local_temperature_extents[0]),
+                                                        int(local_temperature_extents[1]),
+                                                        int(local_temperature_extents[2]),
+                                                        int(local_temperature_extents[3])),
+                                      'chunk_position': tuple((local_temperature_starts // local_temperature_extents).astype(int).tolist()),
+                              },
+          }
+
+          bridge = Bridge(comm, arrays_metadata)
+      FluidMoments:
+        with: {iter_id: $iter_id, local_fdistribu_raw: $local_fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
+        exec: |
+          local_fdistribu = xr.DataArray(
               local_fdistribu_raw,
               dims=( 'species', 'tor1', 'tor2', 'tor3', 'vpar', 'mu'),
           )
 
           fm = FluidMoments(vpar_vals, mu_vals)
 
-          density = fm.compute_density(fdistribu)
-          velocity = fm.compute_velocity(fdistribu, density)
-          temperature = fm.compute_temperature(fdistribu, density, velocity)
+          local_density = fm.compute_density(local_fdistribu)
+          local_velocity = fm.compute_velocity(local_fdistribu, local_density)
+          local_temperature = fm.compute_temperature(local_fdistribu, local_density, local_velocity)
 
-          ds_out = xr.Dataset({
-              'density': density,
-              'velocity': velocity,
-              'temperature': temperature,
-          })
-          ds_out.to_netcdf('fluid_moments.nc', mode='w')
+          bridge.send("partial_density", local_density, int(iter_id))
+          bridge.send("partial_velocity", local_velocity, int(iter_id))
+          bridge.send("partial_temperature", local_temperature, int(iter_id))
+      End:
+        with: {iter_id: $iter_id}
+        exec: |
+          bridge.close(int(iter_id))
   decl_hdf5:
     #-- Read file names and expose them to PDI
     - file: '${gysela_io_filename}'
@@ -270,10 +330,6 @@ plugins:
       on_event: [write_fdistribu]
       collision_policy: replace_and_warn
       communicator: $MPI_COMM_WORLD
-      subfiling:
-        count: 4
-        policy: CONTINUE
-        stripe_size: 8388608
       datasets:
         fdistribu_sptor3Dv2D:
           type: array

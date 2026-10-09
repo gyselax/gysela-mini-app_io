@@ -9,7 +9,7 @@ ANALYTICS_FILE=${4:-analytics.py}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(cd $SCRIPT_DIR/../.. && pwd)"
 
-. ${BASE_DIR}/apps/io/activate_deisa_spack_env.sh
+. ${BASE_DIR}/simulations/io/activate_deisa_spack_env.sh
 
 SCHEFILE="$BASE_DIR/scheduler.json"
 rm -f $SCHEFILE
@@ -41,7 +41,7 @@ python3 processing/$ANALYTICS_FILE &
 analytics_pid=$!
 
 echo "Launch simu"
-mpirun -n $SIMU_NODES $BASE_DIR/build/apps/io/gys_io $SCRIPT_DIR/params/gys_io.yaml $SCRIPT_DIR/params/$PDI_CONFIG & 
+mpirun -n $SIMU_NODES $BASE_DIR/build/simulations/io/gys_io $SCRIPT_DIR/params/gys_io.yaml $SCRIPT_DIR/params/$PDI_CONFIG & 
 simu_pid=$!
 
 wait ${analytics_pid}

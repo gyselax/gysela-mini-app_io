@@ -9,7 +9,10 @@ option(GYSELA_MINI_APP_USE_EXTERNAL_GYSELALIBXX "Use an external Gyselalib++ ins
 #                              Build libraries and executables
 ###############################################################################################
 
-set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
+find_package(DDC REQUIRED COMPONENTS pdi)
+find_package(MPI REQUIRED COMPONENTS CXX)
+find_package(paraconf REQUIRED COMPONENTS C)
+find_package(PDI REQUIRED COMPONENTS C)
 
 ## Link to Gyselalibxx++ library
 if(GYSELA_MINI_APP_USE_EXTERNAL_GYSELALIBXX)

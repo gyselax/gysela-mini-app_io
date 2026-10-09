@@ -159,7 +159,7 @@ plugins:
         exec: |
           import xarray as xr
           import numpy as np
-          from fluid_moments import FluidMoments
+          from processing.fluid_moments import FluidMoments
       FluidMoments:
         with: {local_fdistribu_raw: $local_fdistribu_sptor3Dv2D, vpar_vals: $vpar, mu_vals: $mu}
         exec: |

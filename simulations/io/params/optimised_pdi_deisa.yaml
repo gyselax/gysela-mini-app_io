@@ -163,7 +163,7 @@ plugins:
           import numpy as np
           import logging
           from mpi4py import MPI
-          from fluid_moments import FluidMoments
+          from processing.fluid_moments import FluidMoments
           from deisa.dask import Bridge 
 
           #logging.basicConfig(level=logging.DEBUG)

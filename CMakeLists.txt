@@ -27,5 +27,5 @@ endif()
 ## Build the C++ source library in `src/`
 add_subdirectory(src)
 
-## Build the simulations (applications mains) in `apps/`
-add_subdirectory(apps/)
+## Build the simulations (applications mains) in `simulations/`
+add_subdirectory(simulations/)

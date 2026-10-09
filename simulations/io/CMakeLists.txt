@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 add_executable(gys_io
-    gys_io.cpp
+    ${PROJECT_SOURCE_DIR}/src/io/gys_io.cpp
 )
 
 target_link_libraries(gys_io

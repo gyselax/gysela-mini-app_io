@@ -1,0 +1,296 @@
+# IOPS benchmark: fastest way to write the initial Gysela-X distribution function.
+#
+# Run from the repository root (on the login node), no exports needed:
+#   iops check  simulations/initialisation/iops_config.yaml
+#   iops run    simulations/initialisation/iops_config.yaml --dry-run
+#   iops run    simulations/initialisation/iops_config.yaml --use-cache
+
+benchmark:
+  name: "Gysela-X fdistribu init write benchmark"
+  workdir: "output"
+  repetitions: 1
+  search_method: "exhaustive"
+  executor: "slurm"
+  cache_file: "{{ workdir }}/iops_init_bench.db"
+  cores_expr: "{{ ntasks }}"
+  estimated_time_seconds: 60 # medium grid approximation
+  report_vars: ["nodes", "grid", "method", "backend", "layout", "io_mode", "stripe_count"]
+
+  slurm_options:
+    poll_interval: 15
+    allocation:
+      mode: "single"           # one sbatch allocation, every test runs inside it (srun per test)
+      test_timeout: 7200
+      allocation_script: |
+        #SBATCH --nodes=2
+        #SBATCH --ntasks-per-node=32
+        #SBATCH --cpus-per-task=1
+        #SBATCH --time=03:00:00
+        #SBATCH --exclusive
+        #SBATCH --account=gen2224
+        #SBATCH --constraint=GENOA
+
+        REPO_ROOT="$(git -C "${SLURM_SUBMIT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null || echo "$SLURM_SUBMIT_DIR")"
+        export REPO_ROOT
+        echo "### REPO_ROOT=$REPO_ROOT"
+        [ -f "$REPO_ROOT/toolchains/adastra/genoa/environment.sh" ] || { echo "### ERROR: bad REPO_ROOT"; exit 1; }
+        source "$REPO_ROOT/toolchains/adastra/genoa/environment.sh"
+        source "$REPO_ROOT/.gys_env/bin/activate"
+
+        export HDF5_USE_FILE_LOCKING=FALSE
+
+vars:
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 2]
+
+  tasks_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [32]
+
+  ntasks:
+    type: int
+    expr: "{{ nodes * tasks_per_node }}"
+
+  # small  ~ 0.5 GB
+  # medium ~ 68 GB
+  # large  ~ 275 GB
+  grid:
+    type: str
+    sweep:
+      mode: list
+      values: ["large"]
+
+  shape:
+    type: str
+    expr: "{{ {'small': '2,64,64,32,32,16', 'medium': '2,126,128,64,64,64', 'large': '2,256,256,64,64,64'}[grid] }}"
+
+  backend:
+    type: str
+    sweep:
+      mode: list
+      values: ["hdf5", "netcdf", "raw"]
+
+  layout:
+    type: str
+    sweep:
+      mode: list
+      values: ["shared", "fpp"]
+
+  io_mode:                     # shared file only (posix means no MPI-IO)
+    type: str
+    sweep:
+      mode: list
+      values: ["collective", "independent", "posix"]
+    when: "layout == 'shared'"
+    default: "serial"
+
+  method:
+    type: str
+    expr: "{{ backend }}-{{ layout }}{% if layout == 'shared' %}-{{ io_mode }}{% endif %}"
+
+  # Lustre striping of the output directory
+  stripe_count:
+    type: int
+    sweep:
+      mode: list
+      values: [16, -1]
+    when: "layout == 'shared'"
+    default: 1
+
+  stripe_size_mb:
+    type: int
+    sweep:
+      mode: list
+      values: [16]
+
+  # Memory per rank for one compute+write piece (32 ranks x 512 MiB = 16 GiB per node)
+  piece_mb:
+    type: int
+    sweep:
+      mode: list
+      values: [512]
+
+  nc_format:
+    type: str
+    expr: "NETCDF4"
+    # ONLY uncomment this if parallel NetCDF4 is installed
+    # sweep:
+    #   mode: list
+    #   values: ["NETCDF4", "NETCDF3_64BIT_DATA"]
+
+  mpi_hints:
+    type: str
+    expr: ""
+
+  app:
+    type: str
+    expr: "${REPO_ROOT}/processing/initialisation/init_bench.py"
+
+  data_dir:
+    type: str
+    expr: "{{ execution_dir }}/data"
+
+constraints:
+  - name: "posix_is_raw_only"
+    rule: "io_mode != 'posix' or backend == 'raw'"
+    violation_policy: "skip"
+    description: "Plain POSIX pwrite into the shared file only exists for the raw / custom writer"
+
+command:
+  template: >-
+    python -u "{{ app }}"
+    --backend {{ backend }} --layout {{ layout }} --io-mode {{ io_mode }}
+    --shape {{ shape }} --out {{ data_dir }}
+    --piece-mb {{ piece_mb }} --alignment {{ stripe_size_mb * 1048576 }}
+    --nc-format {{ nc_format }}{% if mpi_hints %} --mpi-hints {{ mpi_hints }}{% endif %}
+    --fsync --verify 8
+
+scripts:
+  - name: "init_bench"
+    script_template: |
+      #!/bin/bash
+      set -uo pipefail
+      # Everything (environment errors included) goes to the parsed file.
+      exec > {{ execution_dir }}/init_bench.out 2>&1
+
+      # REPO_ROOT comes from allocation_script; fail this test if it is missing.
+      if [ ! -f "{{ app }}" ]; then
+        echo "### ERROR: benchmark not found at {{ app }} (REPO_ROOT='${REPO_ROOT:-}')"
+        exit 1
+      fi
+
+      DATA_DIR="{{ data_dir }}"
+      mkdir -p "$DATA_DIR"
+      _init_bench_cleanup() { rm -rf -- "{{ data_dir }}"; }
+      if declare -F _iops_register_exit >/dev/null; then
+        _iops_register_exit _init_bench_cleanup
+      else
+        trap _init_bench_cleanup EXIT
+      fi
+
+      if command -v lfs >/dev/null 2>&1; then
+        lfs setstripe -c {{ stripe_count }} -S {{ stripe_size_mb }}M "$DATA_DIR"
+        lfs getstripe -d "$DATA_DIR"
+      fi
+
+      # One core per rank: no hidden threading in numexpr
+      export OMP_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMEXPR_MAX_THREADS=1 OPENBLAS_NUM_THREADS=1
+      export HDF5_USE_FILE_LOCKING=FALSE
+      export MPICH_MPIIO_HINTS_DISPLAY=1   # Cray MPICH: log the effective MPI-IO hints
+
+      echo "### method={{ method }} nodes={{ nodes }} ntasks={{ ntasks }} grid={{ grid }} stripe_count={{ stripe_count }}"
+      srun --nodes={{ nodes }} --ntasks={{ ntasks }} --ntasks-per-node={{ tasks_per_node }} \
+           --cpus-per-task=1 --kill-on-bad-exit=1 \
+           {{ command.template }}
+
+    parser:
+      file: "{{ execution_dir }}/init_bench.out"
+      metrics:
+        - name: bw_synced_GBps
+          type: float
+        - name: bw_write_GBps
+          type: float
+        - name: time_total_synced
+          type: float
+        - name: time_total
+          type: float
+        - name: time_write
+          type: float
+        - name: time_compute
+          type: float
+        - name: time_sync
+          type: float
+        - name: data_GB
+          type: float
+        # Memory (peak RSS): largest rank, most loaded node, whole job, and the
+        # per-rank baseline (interpreter + libraries) before the piece buffer.
+        - name: mem_peak_rank_MB
+          type: float
+        - name: mem_peak_node_GB
+          type: float
+        - name: mem_peak_total_GB
+          type: float
+        - name: mem_baseline_rank_MB
+          type: float
+        - name: piece_MB
+          type: float
+        # Checks (a test fails when size_errors or verify_errors is not 0):
+        # bytes on disk, bytes actually allocated, files smaller than their
+        # payload, values read back and wrong values.
+        - name: disk_GB
+          type: float
+        - name: disk_alloc_GB
+          type: float
+        - name: size_errors
+          type: int
+        - name: verify_points
+          type: int
+        - name: verify_errors
+          type: int
+      parser_script: |
+        import json
+
+        def parse(file_path):
+            with open(file_path, "r") as f:
+                for line in f:
+                    if line.startswith("INIT_BENCH_RESULT "):
+                        return json.loads(line[len("INIT_BENCH_RESULT "):])
+            raise ValueError(f"no INIT_BENCH_RESULT line in {file_path}")
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/results_init_bench.csv"
+
+reporting:
+  enabled: true
+  output_filename: "init_bench_report.html"
+  theme:
+    style: "plotly_white"
+  best_results:
+    top_n: 10
+    show_command: false
+    min_samples: 3
+  sections:
+    parallel_coordinates: false
+  metrics:
+    bw_synced_GBps:
+      plots:
+        - type: "coverage_heatmap"
+          row_vars: ["method", "stripe_count"]
+          col_var: "nodes"
+          aggregation: "mean"
+          colorscale: "Viridis"
+          title: "Bandwidth incl. fsync (GB/s) - method x stripe count x nodes"
+        - type: "bar"
+          x_var: "method"
+          group_by: "nodes"
+          show_error_bars: true
+          title: "Bandwidth incl. fsync (GB/s) by method"
+    time_write:
+      plots:
+        - type: "coverage_heatmap"
+          row_vars: ["method", "stripe_count"]
+          col_var: "nodes"
+          aggregation: "mean"
+          colorscale: "Viridis"
+          title: "Write phase time (s, open+write+close, no fsync)"
+    mem_peak_node_GB:
+      plots:
+        - type: "bar"
+          x_var: "method"
+          group_by: "nodes"
+          show_error_bars: true
+          title: "Peak memory of the most loaded node (GiB, sum of per-rank peak RSS)"
+    time_total_synced:
+      plots:
+        - type: "bar"
+          x_var: "method"
+          group_by: "nodes"
+          show_error_bars: true
+          title: "Total time incl. compute and fsync (s)"

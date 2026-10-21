@@ -1,0 +1,464 @@
+benchmark:
+  name: "Gys write-method scaling (256 GiB grid, 4/8/16 nodes)"
+  workdir: "output"
+  repetitions: 2
+  report_vars: ["nodes", "config"]
+  search_method: "exhaustive"
+  executor: "local"
+  cache_file: "output/iops_scaling.db"
+
+# ---------------------------------------------------------------------------
+# Question answered by this file: where do the fastest write methods stop scaling?
+#  (Continuation of the iops_config_default.yaml runs)
+#
+#   per_rank_netcdf  each rank -> its own netCDF4 file   (fastest at 4 nodes; netCDF4 == HDF5 speed)
+#   shared_hdf5      all ranks -> one HDF5 file          (best shared-file method at 4 nodes)
+#   subfiling_hdf5   all ranks -> one logical HDF5 file  (decl_hdf5 + subfiling, one subfile per node)
+#
+# Fixed: one grid of 256 GiB, 4 ranks per node.
+# Swept: nodes 4 / 8 / 16 (= 16 / 32 / 64 ranks) and the Lustre stripe count.
+#     per_rank_netcdf: 1, 8      (all-OSTs was 1.5x slower)
+#     shared_hdf5:     8, -1     (stripe 1 was 4.5x slower)
+#     subfiling_hdf5:  1, 8      (all-OSTs was slowest), with 1 or 4 I/O concentrators (ioc) per node;
+#                      plus 1 concentrator per MPI rank (ioc_per_node=4) at stripe 8 only
+# 7 method/stripe/ioc configs x 3 node counts x 2 repetitions = 42 tests
+# ---------------------------------------------------------------------------
+
+vars:
+  method:
+    type: str
+    sweep:
+      mode: list
+      values: ["per_rank_netcdf", "shared_hdf5", "subfiling_hdf5"]
+
+  # Lustre stripe count of the output directory (-1 = all OSTs of the pool)
+  stripe_count:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 8, -1]
+
+  nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [4, 8, 16]
+
+  tasks_per_nodes:
+    type: int
+    sweep:
+      mode: list
+      values: [4]
+
+  stripe_size:
+    type: str
+    sweep:
+      mode: list
+      values: ["4M"]
+
+  # Subfiling only: MPI ranks per node acting as I/O concentrators = subfiles per node
+  # (total subfile count = nodes x ioc_per_node) and HDF5 stripe size in bytes (8 MiB).
+  ioc_per_node:
+    type: int
+    sweep:
+      mode: list
+      values: [1, 4]      # 4 = one I/O concentrator per MPI rank (4 ranks per node); subfiling only
+
+  subfiling_stripe_size:
+    type: int
+    sweep:
+      mode: list
+      values: [8388608]
+
+  # 512 x 128 x 64 x 64 x 64 x 2 species = 274.9 GB (256 GiB).
+  tor1_any_cells:
+    type: int
+    expr: "{{ 509 }}"
+
+  tor2_any_cells:
+    type: int
+    expr: "{{ 128 }}"
+
+  tor3_any_cells:
+    type: int
+    expr: "{{ 64 }}"
+
+  vpar_any_cells:
+    type: int
+    expr: "{{ 63 }}"
+
+  mu_any_cells:
+    type: int
+    expr: "{{ 63 }}"
+
+  # One output directory per execution; deleted when the job ends
+  pfs_path:
+    type: str
+    expr: "{{ execution_dir }}/out"
+
+  # Label used by the report to draw one line per method + stripe count
+  config:
+    type: str
+    expr: "{{ method }}{{ '_ioc' ~ ioc_per_node if method == 'subfiling_hdf5' else '' }}_stripe{{ stripe_count }}"
+
+  gys_io_output:
+    type: str
+    expr: "{{ execution_dir }}/summary.txt"
+
+command:
+  template: "$REPO_ROOT/build/simulations/pdi-write-methods/gys_write_methods {{ inputs.gys_write_methods_config.path }} {{ inputs.pdi_config.path }}"
+
+scripts:
+  - name: "write methods benchmark"
+    inputs:
+      - name: "gys_write_methods_config"
+        path: "{{ execution_dir }}/gys_write_methods.yaml"
+        template: |
+          Application:
+            subfiling: {{ "true" if method == "subfiling_hdf5" else "false" }}   # => MPI_THREAD_MULTIPLE when true
+
+          SplineMesh:
+            Tor1_ncells: {{ tor1_any_cells }}    # number of points in the radial direction
+            Tor2_ncells: {{ tor2_any_cells }}    # number of points in the poloidal direction
+            Tor3_ncells: {{ tor3_any_cells }}    # number of points in the toroidal direction
+            Vpar_ncells: {{ vpar_any_cells }}    # number of points in the parallel velocity direction
+            Mu_ncells:   {{ mu_any_cells }}      # number of points in the adiabatic invariant direction
+
+            Tor1_min: 0.0
+            Tor1_max: 1.0
+            Tor2_min: 0.0
+            Tor2_max: 6.283185307179586476925286766559005768394
+            Tor3_min: 0.0
+            Tor3_max: 6.283185307179586476925286766559005768394
+            Vpar_min: -7.0
+            Vpar_max: 7.0
+            Mu_min: 0.0
+            Mu_max: 12.0
+
+          SpeciesInfo:
+            - name: 'electron'
+              charge: -1.
+              mass: 0.0005
+              N_maxw: 1.0
+              T_maxw: 1.0
+              Upar_maxw: 0.0
+            - name: 'ion'
+              charge: 1.
+              mass: 1.
+              N_maxw: 1.0
+              T_maxw: 1.0
+              Upar_maxw: 3.0
+
+      - name: "pdi_config"
+        path: "{{ execution_dir }}/pdi_config.yaml"
+        template: |
+          # -- Current write method: {{ method }} -- #
+          {% set G = "[ '$species_extents[0]', '$tor1_extents[0]', '$tor2_extents[0]', '$tor3_extents[0]', '$vpar_extents[0]', '$mu_extents[0]' ]" %}
+          {% set S = "[ '$local_fdistribu_starts[0]', '$local_fdistribu_starts[1]', '$local_fdistribu_starts[2]', '$local_fdistribu_starts[3]', '$local_fdistribu_starts[4]', '$local_fdistribu_starts[5]' ]" %}
+          {% set E = "[ '$local_fdistribu_extents[0]', '$local_fdistribu_extents[1]', '$local_fdistribu_extents[2]', '$local_fdistribu_extents[3]', '$local_fdistribu_extents[4]', '$local_fdistribu_extents[5]' ]" %}
+          metadata:
+            species_extents: { type: array, subtype: size_t, size: 1 }
+            tor1_extents: { type: array, subtype: size_t, size: 1 }
+            tor2_extents: { type: array, subtype: size_t, size: 1 }
+            tor3_extents: { type: array, subtype: size_t, size: 1 }
+            vpar_extents: { type: array, subtype: size_t, size: 1 }
+            mu_extents: { type: array, subtype: size_t, size: 1 }
+            # Index range of this rank's chunk in the global array
+            local_fdistribu_starts: { type: array, subtype: size_t, size: 6 }
+            local_fdistribu_extents: { type: array, subtype: size_t, size: 6 }
+
+          data:
+            local_fdistribu_sptor3Dv2D:
+              type: array
+              subtype: double
+              size: {{ E }}
+
+          plugins:
+            mpi:
+            {% if method == "shared_netcdf" %}
+            decl_netcdf:
+              - file: '{{ pfs_path }}/fdistribu_shared.nc'
+                on_event: [write_fdistribu]
+                communicator: $MPI_COMM_WORLD
+                variables:
+                  fdistribu:
+                    type: array
+                    subtype: double
+                    size: {{ G }}
+                write:
+                  local_fdistribu_sptor3Dv2D:
+                    variable: fdistribu
+                    variable_selection:
+                      start: {{ S }}
+                      subsize: {{ E }}
+            {% elif method == "per_rank_netcdf" %}
+            # No communicator => serial netCDF4: each rank creates and writes its own file,
+            # independently of the others
+            decl_netcdf:
+              - file: '{{ pfs_path }}/fdistribu_r${local_fdistribu_starts[0]}_${local_fdistribu_starts[1]}_${local_fdistribu_starts[2]}_${local_fdistribu_starts[3]}_${local_fdistribu_starts[4]}_${local_fdistribu_starts[5]}.nc'
+                on_event: [write_fdistribu]
+                write: [ local_fdistribu_sptor3Dv2D ]
+            {% elif method == "per_rank_hdf5" %}
+            # No communicator => each rank opens and writes its own file, independently
+            decl_hdf5:
+              - file: '{{ pfs_path }}/fdistribu_r${local_fdistribu_starts[0]}_${local_fdistribu_starts[1]}_${local_fdistribu_starts[2]}_${local_fdistribu_starts[3]}_${local_fdistribu_starts[4]}_${local_fdistribu_starts[5]}.h5'
+                on_event: write_fdistribu
+                write: [ local_fdistribu_sptor3Dv2D ]
+            {% else %}
+            decl_hdf5:
+              - file: '{{ pfs_path }}/fdistribu_shared.h5'
+                on_event: write_fdistribu
+                communicator: $MPI_COMM_WORLD
+            {% if method == "subfiling_hdf5" %}
+                # count = number of subfiles = nodes x I/O concentrators per node.
+                subfiling:
+                  count: {{ nodes * ioc_per_node }}
+                  policy: CONTINUE
+                  stripe_size: {{ subfiling_stripe_size }}
+            {% endif %}
+                datasets:
+                  fdistribu: { type: array, subtype: double, size: {{ G }} }
+                write:
+                  local_fdistribu_sptor3Dv2D:
+                    dataset: fdistribu
+                    dataset_selection: { start: {{ S }}, size: {{ E }} }
+            {% endif %}
+
+    script_template: |
+      trap 'rm -rf {{ pfs_path }}' EXIT
+      rm -rf {{ pfs_path }}
+      mkdir -p {{ pfs_path }}
+      lfs setstripe -c {{ stripe_count }} -S {{ stripe_size }} {{ pfs_path }} || true
+      export H5FD_SUBFILING_SUBFILE_PREFIX={{ pfs_path }}
+      export H5FD_SUBFILING_IOC_PER_NODE={{ ioc_per_node }}
+      mpirun {{ command.template }} >> {{ execution_dir }}/gys_io.out 2>&1
+      echo "### Bytes written: $(du -sb {{ pfs_path }} | cut -f1)" >> {{ execution_dir }}/gys_io.out
+      echo "### Files written: $(find {{ pfs_path }} -type f | wc -l)" >> {{ execution_dir }}/gys_io.out
+
+    parser:
+      file: "{{ execution_dir }}/gys_io.out"
+      metrics:
+        - name: time_write
+          type: float
+        - name: time_total
+          type: float
+        - name: bytes_written
+          type: float
+        - name: files_written
+          type: float
+        - name: subfiles_written
+          type: float
+        - name: gb_per_s
+          type: float
+      parser_script: |
+        def parse(file_path):
+          # time_* = slowest rank (max over every "Time ...:" line found in the log)
+          tw = []
+          tt = []
+          nbytes = None
+          nfiles = None
+          nsub = None
+          with open(file_path, "r") as f:
+              for line in f:
+                if "Time write:" in line:
+                  tw.append(float(line.split("Time write:")[1].strip().rstrip('s')))
+                elif "Time total:" in line:
+                  tt.append(float(line.split("Time total:")[1].strip().rstrip('s')))
+                elif "Bytes written:" in line:
+                  nbytes = float(line.split("Bytes written:")[1].strip())
+                elif "Subfiles written:" in line:
+                  nsub = float(line.split("Subfiles written:")[1].strip())
+                elif "Files written:" in line:
+                  nfiles = float(line.split("Files written:")[1].strip())
+
+          if not tw or nbytes is None or nfiles is None:
+            raise ValueError("incomplete log: time_write / bytes_written / files_written missing")
+          if min(tw) <= 0:
+            raise ValueError("non-positive write time")
+
+          return {
+            "time_write": max(tw) if tw else None,
+            "time_total": max(tt) if tt else None,
+            "bytes_written": nbytes,
+            "files_written": nfiles,
+            "subfiles_written": nsub,
+            "gb_per_s": (nbytes / 1e9 / max(tw)) if (tw and nbytes) else None,
+          }
+
+reporting:
+  enabled: true
+  output_filename: "analysis_report_scaling.html"
+  sections:
+    test_summary: false
+    best_results: true
+    variable_impact: false
+    parallel_coordinates: false
+    bayesian_evolution: false
+    bayesian_parameter_evolution: false
+    resource_sampling: false
+    gallery: false
+    versions: false
+    custom_plots: true
+  best_results:
+    top_n: 12
+    show_command: false
+  metrics:
+    gb_per_s:
+      plots:
+        - type: line
+          x_var: nodes
+          group_by: config
+          title: "Write bandwidth vs node count (256 GiB, 4 ranks per node)"
+          yaxis_label: "GB/s (higher is better)"
+    time_write:
+      plots:
+        - type: line
+          x_var: nodes
+          group_by: config
+          title: "Write time vs node count (256 GiB, 4 ranks per node)"
+          yaxis_label: "seconds (lower is better)"
+
+constraints:
+  - name: per_rank_stripes
+    rule: "method != 'per_rank_netcdf' or stripe_count in (1, 8)"
+    violation_policy: skip
+  - name: shared_stripes
+    rule: "method != 'shared_hdf5' or stripe_count in (8, -1)"
+    violation_policy: skip
+  - name: subfiling_stripes
+    rule: "method != 'subfiling_hdf5' or stripe_count in (1, 8)"
+    violation_policy: skip
+  # ioc_per_node only matters for subfiling; the 4-per-node variant is run at stripe 8 only.
+  - name: ioc_only_for_subfiling
+    rule: "method == 'subfiling_hdf5' or ioc_per_node == 1"
+    violation_policy: skip
+  - name: ioc4_stripe8
+    rule: "ioc_per_node == 1 or stripe_count == 8"
+    violation_policy: skip
+
+output:
+  sink:
+    type: csv
+    path: "{{ workdir }}/output/results_scaling_256GiB.csv"
+
+machines:
+  adastra:
+    benchmark:
+      repetitions: 2
+      executor: "slurm"
+      slurm_options:
+        poll_interval: 15
+        allocation:
+          # ONE allocation; every test runs inside it, one after another (never concurrently),
+          mode: "single"
+          test_timeout: 1200
+          allocation_script: |
+            #SBATCH --nodes=16
+            #SBATCH --ntasks-per-node=4
+            #SBATCH --time=03:00:00
+            #SBATCH --exclusive
+            #SBATCH --account=gen2224
+            #SBATCH --constraint=GENOA
+
+            REPO_ROOT="$(git -C "${SLURM_SUBMIT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null || echo "$SLURM_SUBMIT_DIR")"
+            export REPO_ROOT
+            echo "### REPO_ROOT=$REPO_ROOT"
+            [ -f "$REPO_ROOT/toolchains/adastra/genoa/environment.sh" ] || { echo "### ERROR: bad REPO_ROOT"; exit 1; }
+            source "$REPO_ROOT/toolchains/adastra/genoa/environment.sh"
+            source "$REPO_ROOT/.gys_env/bin/activate"
+            export HDF5_USE_FILE_LOCKING=FALSE
+    scripts:
+      - name: "write methods benchmark"
+        script_template: |
+          #!/bin/bash
+          set -e
+          set -o pipefail
+
+          # Send everything to the parsed file.
+          exec >> {{ execution_dir }}/gys_io.out 2>&1
+
+          echo "### method={{ method }} stripe_count={{ stripe_count }} nodes={{ nodes }} ranks/node={{ tasks_per_nodes }}"
+
+          # Delete the data when the test ends, whatever the outcome
+          cleanup_output() { rm -rf {{ pfs_path }}; }
+          if declare -F _iops_register_exit > /dev/null; then
+            _iops_register_exit cleanup_output
+          else
+            trap cleanup_output EXIT
+          fi
+          trap 'exit 143' TERM INT
+
+          # Fresh per-execution directory with the right Lustre layout
+          rm -rf {{ pfs_path }}
+          mkdir -p {{ pfs_path }}
+          lfs setstripe -c {{ stripe_count }} -S {{ stripe_size }} -p bandwidth {{ pfs_path }}
+          echo "### stripe layout: $(lfs getstripe -d {{ pfs_path }} | tr '\n' ' ')"
+
+          # HDF5 subfiling
+          export H5FD_SUBFILING_SUBFILE_PREFIX={{ pfs_path }}
+          export H5FD_SUBFILING_IOC_PER_NODE={{ ioc_per_node }}
+          {% if method == "subfiling_hdf5" %}
+          # The subfiling VFD needs MPI_THREAD_MULTIPLE
+          export MPICH_MAX_THREAD_SAFETY=multiple
+          {% else %}
+          unset MPICH_MAX_THREAD_SAFETY
+          {% endif %}
+
+          srun --nodes={{ nodes }} --ntasks={{ nodes * tasks_per_nodes }} {{ command.template }}
+
+          echo "### Bytes written: $(du -sb {{ pfs_path }} | cut -f1)"
+          echo "### Files written: $(find {{ pfs_path }} -type f | wc -l)"
+          echo "### Subfiles written: $(find {{ pfs_path }} -type f -name '*.subfile_*_of_*' | wc -l)"
+          # Data sanity guards: a run that wrote the wrong amount of data fails
+          log={{ execution_dir }}/gys_io.out
+          getv() { grep -m1 -E "^[[:space:]]*$1:" "$log" | awk '{print $2}'; }
+          nsp=$(grep -m1 "Number of kinetic species:" "$log" | awk '{print $NF}')
+          g1=$(getv tor1); g2=$(getv tor2); g3=$(getv tor3); g4=$(getv vpar); g5=$(getv mu)
+          if [ -z "$nsp" ] || [ -z "$g1" ] || [ -z "$g2" ] || [ -z "$g3" ] || [ -z "$g4" ] || [ -z "$g5" ]; then
+            echo "### ERROR: could not read the grid sizes from the application log"
+            exit 1
+          fi
+          expected_bytes=$(( nsp * g1 * g2 * g3 * g4 * g5 * 8 ))
+          max_bytes=$(( expected_bytes + expected_bytes / 50 ))
+          written_bytes=$(du -sb {{ pfs_path }} | cut -f1)
+          written_files=$(find {{ pfs_path }} -type f | wc -l)
+          echo "### Grid used: $nsp x $g1 x $g2 x $g3 x $g4 x $g5 -> expected payload bytes: $expected_bytes (metadata overhead: $(( written_bytes - expected_bytes )) B)"
+          # Never less than the payload; at most 2 % above it
+          if [ "$written_bytes" -lt "$expected_bytes" ]; then
+            echo "### ERROR: only $written_bytes bytes on disk, payload is $expected_bytes (truncated or missing write)"
+            exit 1
+          fi
+          if [ "$written_bytes" -gt "$max_bytes" ]; then
+            echo "### ERROR: $written_bytes bytes on disk, more than 2 % above the $expected_bytes payload (stale or duplicated files)"
+            exit 1
+          fi
+          {% if method in ["per_rank_netcdf", "per_rank_hdf5"] %}
+          if [ "$written_files" -ne {{ nodes * tasks_per_nodes }} ]; then
+            echo "### ERROR: $written_files files, expected one per rank ({{ nodes * tasks_per_nodes }})"
+            exit 1
+          fi
+          {% elif method in ["shared_netcdf", "shared_hdf5"] %}
+          if [ "$written_files" -ne 1 ]; then
+            echo "### ERROR: $written_files files, expected exactly 1 shared file"
+            exit 1
+          fi
+          {% endif %}
+          {% if method in ["shared_netcdf", "per_rank_netcdf"] %}
+          nc_file=$(find {{ pfs_path }} -type f -name '*.nc' -print -quit)
+          nc_sig=$(head -c 4 "$nc_file" | tail -c 3)
+          echo "### netcdf file signature: $nc_sig (expected: HDF = NetCDF-4)"
+          if [ "$nc_sig" != "HDF" ]; then
+            echo "### ERROR: not a NetCDF-4 file"
+            exit 1
+          fi
+          {% endif %}
+          {% if method == "subfiling_hdf5" %}
+          if [ "$(find {{ pfs_path }} -type f -name '*.subfile_*_of_*' | wc -l)" -lt 1 ]; then
+            echo "### ERROR: no subfiles produced, subfiling was not active"
+            exit 1
+          fi
+          {% endif %}
+
+          # Cleanup
+          rm -rf {{ pfs_path }}
+          sleep 15

@@ -371,7 +371,6 @@ def main(argv=None):
     local_bytes = int(np.prod(local_count, dtype=np.int64)) * itemsize
     disk_bytes, disk_alloc, size_errors = check_sizes(comm, writer, local_bytes, total_bytes)
     if rank == 0 and disk_alloc < 0.99 * total_bytes:
-        # Not fatal: a compressing file system also allocates less than st_size.
         print(f"### WARNING: {disk_alloc} bytes allocated on disk for a {total_bytes}-byte payload (holes?)", flush=True)
 
     # 2. read-back with the same library: both ends of every piece + random points.

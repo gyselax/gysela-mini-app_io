@@ -23,6 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+bench = ["iops-benchmark[bayesian]"]
 dev = ["pytest>=8.0", "deptry>=0.25.0"]
 
 [tool.pytest.ini_options]

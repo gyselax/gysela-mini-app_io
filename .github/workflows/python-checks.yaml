@@ -26,4 +26,4 @@ jobs:
           python3 -m pip install -e .[dev]
       - name: Check dependencies using deptry
         run: |
-          deptry --optional-dependencies-dev-groups=bench,dev --package-module-name-map=PyYAML=yaml,deisa-dask=deisa processing
+          deptry --known-first-party=processing --optional-dependencies-dev-groups=bench,dev --package-module-name-map=PyYAML=yaml,deisa-dask=deisa processing

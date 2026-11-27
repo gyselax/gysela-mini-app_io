@@ -9,17 +9,16 @@ description = "Python utilities for GYSELA mini-apps"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "processing",
+    "dask",
     "deisa-dask",
     "distributed",
-    "mpi4py",
-    "pandas",
-    "numpy",
     "h5py",
     "matplotlib",
+    "mpi4py",
+    "numpy",
+    "pandas",
     "PyYAML",
     "xarray[io]",
-    "dask",
 ]
 
 [project.optional-dependencies]
